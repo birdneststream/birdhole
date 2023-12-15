@@ -41,6 +41,7 @@ type FileInfo struct {
 	Extension   string `json:"extension"`
 	KeyExpiry   int64  `json:"key_expiry"`
 	Description string `json:"description"`
+	Views       int    `json:"views"`
 }
 
 func handlePostRequest(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +107,7 @@ func handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		Description: description,
 		Width:       0,
 		Height:      0,
+		Views:       0,
 	}
 
 	putFile(fileInfo, file, w)
@@ -284,6 +286,40 @@ func main() {
 
 		http.ServeFile(w, r, config.FilePath+r.URL.Path[1:])
 
+		// If a file is previewed extend the time by 1 Hour
+		if birdBase.Has([]byte(r.URL.Path[1:])) {
+			valueStr, err := birdBase.Get([]byte(r.URL.Path[1:]))
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			var fileInfo FileInfo
+			err = json.Unmarshal(valueStr, &fileInfo)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			// if views is not out of bounds for int
+			if fileInfo.Views < 2147483647 {
+				fileInfo.Views = fileInfo.Views + 1
+			}
+
+			// If the fileInfo.KeyExpiry is not out of bounds for int64
+			if fileInfo.KeyExpiry < 9223372036854775807-int64(3600*fileInfo.Views) {
+				fileInfo.KeyExpiry = fileInfo.KeyExpiry + int64(3600*fileInfo.Views)
+			}
+
+			fileInfoJson, err := json.Marshal(fileInfo)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			err = birdBase.Put([]byte(r.URL.Path[1:]), fileInfoJson)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+
 	})
 
 	go checkExpiry()
@@ -350,7 +386,8 @@ func galleryHtml(isAdmin bool) string {
 					<p class="text-gray-700">%s</p>
 					<p class="text-sm text-gray-500">Expires: %s</p>
 					<p class="text-sm text-gray-500">Size: %.2f KB</p>
-		`, config.Host, fileInfo.Name, config.Host, fileInfo.Name, fileInfo.Name, fileInfo.Name, fileInfo.Description, duration, float64(fileInfo.Size)/1024.0)
+					<p class="text-sm text-gray-500">Views: %d</p>
+		`, config.Host, fileInfo.Name, config.Host, fileInfo.Name, fileInfo.Name, fileInfo.Name, fileInfo.Description, duration, float64(fileInfo.Size)/1024.0, fileInfo.Views)
 
 		if isAdmin {
 			html += fmt.Sprintf(`
