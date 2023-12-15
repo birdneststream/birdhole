@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"image"
 	"io"
 	"log"
 	"math/rand"
@@ -131,16 +132,16 @@ func putFile(fileInfo FileInfo, file multipart.File, w http.ResponseWriter) {
 	io.Copy(f, file)
 
 	// If the file is an image, get its dimensions
-	// if strings.HasPrefix(fileInfo.MimeType, "image/") {
-	// 	image, _, err := image.DecodeConfig(file)
-	// 	if err != nil {
-	// 		http.Error(w, "ERR"+err.Error(), http.StatusInternalServerError)
-	// 		return
-	// 	}
+	if strings.HasPrefix(fileInfo.MimeType, "image/") {
+		image, _, err := image.DecodeConfig(f)
+		if err != nil {
+			http.Error(w, "ERR"+err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-	// 	fileInfo.Width = image.Width
-	// 	fileInfo.Height = image.Height
-	// }
+		fileInfo.Width = image.Width
+		fileInfo.Height = image.Height
+	}
 
 	fileInfoJson, err := json.Marshal(fileInfo)
 	if err != nil {
