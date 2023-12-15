@@ -39,6 +39,7 @@ type FileInfo struct {
 	Size        int64  `json:"size"`
 	MimeType    string `json:"mime_type"`
 	Extension   string `json:"extension"`
+	Timestamp   int64  `json:"timestamp"`
 	KeyExpiry   int64  `json:"key_expiry"`
 	Description string `json:"description"`
 	Views       int    `json:"views"`
@@ -104,6 +105,7 @@ func handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		MimeType:    fileType.String(),
 		Extension:   fileType.Extension(),
 		KeyExpiry:   time.Now().Unix() + expiryInt,
+		Timestamp:   time.Now().Unix(),
 		Description: description,
 		Width:       0,
 		Height:      0,
@@ -248,10 +250,14 @@ func main() {
 		}
 
 		isAdmin := r.URL.Query().Get("key") == config.AdminGalleryKey
+		sortBy := r.URL.Query().Get("sortBy")
+
+		if sortBy == "" {
+			sortBy = "new"
+		}
 
 		// return html with all images
-		fmt.Fprintf(w, galleryHtml(isAdmin))
-
+		fmt.Fprintf(w, galleryHtml(isAdmin, sortBy))
 	})
 
 	http.HandleFunc("/delete", func(w http.ResponseWriter, r *http.Request) {
@@ -332,9 +338,14 @@ type KeyExpiry struct {
 	ExpiryTime int64
 }
 
-func galleryHtml(isAdmin bool) string {
+func galleryHtml(isAdmin bool, sortBy string) string {
+	galleryKey := config.GalleryKey
+	if isAdmin {
+		galleryKey = config.AdminGalleryKey
+	}
+
 	// html start string
-	html := `
+	html := fmt.Sprintf(`
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -346,8 +357,16 @@ func galleryHtml(isAdmin bool) string {
     <body class="bg-gray-100">
         <div class="container mx-auto px-4 sm:px-6 lg:px-8">
             <h1 class="text-4xl my-8 text-center">Birdhole</h1>
+            <div class="flex flex-wrap justify-center space-x-2 sm:space-x-4 mb-8">
+                <a href="/gallery?key=%s&sortBy=new" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 sm:py-2 px-2 sm:px-4 rounded mb-2 sm:mb-0">New</a>
+                <a href="/gallery?key=%s&sortBy=old" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 sm:py-2 px-2 sm:px-4 rounded mb-2 sm:mb-0">Old</a>
+                <a href="/gallery?key=%s&sortBy=expiring_soon" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 sm:py-2 px-2 sm:px-4 rounded mb-2 sm:mb-0">Expiring Soon</a>
+                <a href="/gallery?key=%s&sortBy=expiring_latest" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 sm:py-2 px-2 sm:px-4 rounded mb-2 sm:mb-0">Expiring Latest</a>
+                <a href="/gallery?key=%s&sortBy=popular" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 sm:py-2 px-2 sm:px-4 rounded mb-2 sm:mb-0">Popular</a>
+                <a href="/gallery?key=%s&sortBy=least_popular" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 sm:py-2 px-2 sm:px-4 rounded mb-2 sm:mb-0">Least Popular</a>
+            </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-    `
+    `, galleryKey, galleryKey, galleryKey, galleryKey, galleryKey, galleryKey)
 
 	// Store keys and their expiry times in a slice
 	var filesInfo []FileInfo
@@ -369,7 +388,28 @@ func galleryHtml(isAdmin bool) string {
 
 	// Sort the slice by expiry time
 	sort.Slice(filesInfo, func(i, j int) bool {
-		return filesInfo[i].KeyExpiry > filesInfo[j].KeyExpiry
+		switch sortBy {
+		case "new":
+			return filesInfo[i].Timestamp > filesInfo[j].Timestamp
+
+		case "old":
+			return filesInfo[i].Timestamp < filesInfo[j].Timestamp
+
+		case "expiring_soon":
+			return filesInfo[i].KeyExpiry < filesInfo[j].KeyExpiry
+
+		case "expiring_latest":
+			return filesInfo[i].KeyExpiry > filesInfo[j].KeyExpiry
+
+		case "popular":
+			return filesInfo[i].Views > filesInfo[j].Views
+
+		case "least_popular":
+			return filesInfo[i].Views < filesInfo[j].Views
+
+		default:
+			return filesInfo[i].Timestamp > filesInfo[j].Timestamp
+		}
 	})
 
 	// Generate HTML
