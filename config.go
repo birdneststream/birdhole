@@ -3,7 +3,7 @@ package main
 type (
 	Config struct {
 		UrlLen          int
-		Expiry          int
+		Expiry          int64
 		FilePath        string
 		Port            string
 		Listen          string

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -31,8 +32,18 @@ func generateRandomFilename(urlLen int, extension string) string {
 	return string(bytes) + extension
 }
 
-func handlePostRequest(w http.ResponseWriter, r *http.Request) {
+type FileInfo struct {
+	Name        string `json:"name"`
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	Size        int64  `json:"size"`
+	MimeType    string `json:"mime_type"`
+	Extension   string `json:"extension"`
+	KeyExpiry   int64  `json:"key_expiry"`
+	Description string `json:"description"`
+}
 
+func handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	// check if header value contains X-Auth-Token and it is set
 	if r.Header.Get("X-Auth-Token") != config.Key {
 		http.NotFound(w, r)
@@ -45,20 +56,18 @@ func handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	urlLen := r.FormValue("url_len")
-	// convert urlLen to int
-	urlLenInt, err := strconv.Atoi(urlLen)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	urlLenInt := config.UrlLen
+	if r.FormValue("url_len") != "" {
+		urlLen := r.FormValue("url_len")
+		// convert urlLen to int
+		urlLenInt, _ = strconv.Atoi(urlLen)
 	}
 
-	expiry := r.FormValue("expiry")
-	// convert expiry to int64
-	expiryInt, err := strconv.ParseInt(expiry, 10, 64)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	expiryInt := config.Expiry
+	if r.FormValue("expiry") != "" {
+		expiry := r.FormValue("expiry")
+		// convert expiry to int64
+		expiryInt, _ = strconv.ParseInt(expiry, 10, 64)
 	}
 
 	// description, if the length is over 2048 trim it
@@ -88,34 +97,30 @@ func handlePostRequest(w http.ResponseWriter, r *http.Request) {
 
 	fileName := generateRandomFilename(urlLenInt, fileType.Extension())
 
-	putKey(fileName, expiryInt, description, w)
-	putFile(fileName, file, w)
+	fileInfo := FileInfo{
+		Name:        fileName,
+		Size:        r.ContentLength,
+		MimeType:    fileType.String(),
+		Extension:   fileType.Extension(),
+		KeyExpiry:   time.Now().Unix() + expiryInt,
+		Description: description,
+		Width:       0,
+		Height:      0,
+	}
+
+	putFile(fileInfo, file, w)
 
 	// return url with config.Host
 	fmt.Fprintf(w, "%s/%s", "https://"+config.Host, fileName)
-
 }
 
-func putKey(fileName string, expiryInt int64, description string, w http.ResponseWriter) {
-	// save urlLen, expiry, and fileBytes to bird.db
-	key := fileName
-	expiryTime := time.Now().Unix() + expiryInt
-	expiryStr := strconv.FormatInt(expiryTime, 10)
-
-	err := birdBase.Put([]byte(key), []byte(expiryStr+"\n\r"+description))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-}
-
-func putFile(fileName string, file multipart.File, w http.ResponseWriter) {
+func putFile(fileInfo FileInfo, file multipart.File, w http.ResponseWriter) {
 	// if folder images does not exist create it
 	if _, err := os.Stat(config.FilePath); os.IsNotExist(err) {
 		os.Mkdir(config.FilePath, 0755)
 	}
 
-	f, err := os.OpenFile(config.FilePath+"/"+fileName, os.O_WRONLY|os.O_CREATE, 0644)
+	f, err := os.OpenFile(config.FilePath+"/"+fileInfo.Name, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -125,6 +130,29 @@ func putFile(fileName string, file multipart.File, w http.ResponseWriter) {
 	file.Seek(0, 0)
 	io.Copy(f, file)
 
+	// If the file is an image, get its dimensions
+	// if strings.HasPrefix(fileInfo.MimeType, "image/") {
+	// 	image, _, err := image.DecodeConfig(file)
+	// 	if err != nil {
+	// 		http.Error(w, "ERR"+err.Error(), http.StatusInternalServerError)
+	// 		return
+	// 	}
+
+	// 	fileInfo.Width = image.Width
+	// 	fileInfo.Height = image.Height
+	// }
+
+	fileInfoJson, err := json.Marshal(fileInfo)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = birdBase.Put([]byte(fileInfo.Name), fileInfoJson)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func checkExpiry() {
@@ -141,14 +169,13 @@ func checkExpiry() {
 					log.Fatal(err)
 				}
 
-				expiryTime := strings.Split(string(valueStr), "\n\r")[0]
-
-				value, err := strconv.ParseInt(string(expiryTime), 10, 64)
+				var fileInfo FileInfo
+				err = json.Unmarshal(valueStr, &fileInfo)
 				if err != nil {
 					log.Fatal(err)
 				}
 
-				if time.Now().Unix() > value {
+				if time.Now().Unix() > fileInfo.KeyExpiry {
 					deleteFile(string(key))
 				}
 			}(key)
@@ -158,6 +185,7 @@ func checkExpiry() {
 		time.Sleep(1 * time.Minute)
 	}
 }
+
 func deleteFile(key string) {
 	if !birdBase.Has([]byte(key)) {
 		log.Println("Key not found: " + key)
@@ -298,43 +326,33 @@ func galleryHtml(isAdmin bool) string {
     `
 
 	// Store keys and their expiry times in a slice
-	var keysExpiry []KeyExpiry
+	var filesInfo []FileInfo
 	for key := range birdBase.Keys() {
 		valueStr, err := birdBase.Get(key)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		expiryTime := strings.Split(string(valueStr), "\n\r")[0]
-		expiryTimeInt, err := strconv.ParseInt(string(expiryTime), 10, 64)
+		// Deserialize the JSON data into a FileInfo struct
+		var fileInfo FileInfo
+		err = json.Unmarshal(valueStr, &fileInfo)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		keysExpiry = append(keysExpiry, KeyExpiry{Key: string(key), ExpiryTime: expiryTimeInt})
+		filesInfo = append(filesInfo, fileInfo)
 	}
 
 	// Sort the slice by expiry time
-	sort.Slice(keysExpiry, func(i, j int) bool {
-		return keysExpiry[i].ExpiryTime > keysExpiry[j].ExpiryTime
+	sort.Slice(filesInfo, func(i, j int) bool {
+		return filesInfo[i].KeyExpiry > filesInfo[j].KeyExpiry
 	})
 
 	// Generate HTML
-	for _, ke := range keysExpiry {
-		valueStr, err := birdBase.Get([]byte(ke.Key))
-		if err != nil {
-			log.Fatal(err)
-		}
+	for _, fileInfo := range filesInfo {
+		duration := durafmt.Parse(time.Second * time.Duration(fileInfo.KeyExpiry-time.Now().Unix()))
 
-		description := ""
-		if len(strings.Split(string(valueStr), "\n\r")) == 2 {
-			description = strings.Split(string(valueStr), "\n\r")[1]
-		}
-
-		duration := durafmt.Parse(time.Second * time.Duration(ke.ExpiryTime-time.Now().Unix()))
-
-		if !isAdmin {
-			html += fmt.Sprintf(`
+		html += fmt.Sprintf(`
 			<div class="border rounded-lg overflow-hidden">
 				<a href="https://%s/%s" target="_blank">
 					<img class="w-full h-96 object-contain" src="https://%s/%s" alt="%s">
@@ -343,35 +361,34 @@ func galleryHtml(isAdmin bool) string {
 					<h2 class="font-bold mb-2">%s</h2>
 					<p class="text-gray-700">%s</p>
 					<p class="text-sm text-gray-500">Expires: %s</p>
-				</div>
-			</div>
-		`, config.Host, ke.Key, config.Host, ke.Key, ke.Key, ke.Key, description, duration)
-		} else {
+					<p class="text-sm text-gray-500">Size: %.2f KB</p>
+					<p class="text-sm text-gray-500">Dimensions: %dx%d</p>
+		`, config.Host, fileInfo.Name, config.Host, fileInfo.Name, fileInfo.Name, fileInfo.Name, fileInfo.Description, duration, float64(fileInfo.Size)/1024.0, fileInfo.Width, fileInfo.Height)
+
+		if isAdmin {
 			html += fmt.Sprintf(`
-			<div class="border rounded-lg overflow-hidden">
-				<a href="https://%s/%s" target="_blank">
-					<img class="w-full h-96 object-contain" src="https://%s/%s" alt="%s">
-				</a>
-				<div class="p-4">
-					<h2 class="font-bold mb-2">%s</h2>
-					<p class="text-gray-700">%s</p>
-					<p class="text-sm text-gray-500">Expires: %s</p>
 					<a href="https://%s/delete?delete=%s&key=%s" class="mt-2 bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded inline-block">
 						Delete
-					</a>
-				</div>
-			</div>
-		`, config.Host, ke.Key, config.Host, ke.Key, ke.Key, ke.Key, description, duration, config.Host, ke.Key, config.AdminGalleryKey)
+					</a>`,
+				config.Host, fileInfo.Name, config.AdminGalleryKey)
 		}
 
+		html += `
+				</div>
+			</div>`
 	}
 
 	html += `
-            </div>
-        </div>
-    </body>
-    </html>
-    `
+			</div>
+		</div>
+	</body>
+	</html>
+	`
+
+	// minify html
+	html = strings.ReplaceAll(html, "\n", "")
+	html = strings.ReplaceAll(html, "\t", "")
+	html = strings.ReplaceAll(html, "  ", "")
 
 	return html
 }

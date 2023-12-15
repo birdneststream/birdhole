@@ -1,0 +1,9 @@
+UrlLen = 5
+Expiry = 432000
+Port = "5000"
+Listen = "127.0.0.1"
+Host = "urltohost.com"
+FilePath = "images/"
+Key = "keyforuploading"
+galleryKey = "keytopreviewgallery"
+adminGalleryKey = "keytodeleteimagesfromgallery"
