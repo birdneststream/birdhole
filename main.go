@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"image"
 	"io"
 	"log"
 	"math/rand"
@@ -130,18 +129,6 @@ func putFile(fileInfo FileInfo, file multipart.File, w http.ResponseWriter) {
 
 	file.Seek(0, 0)
 	io.Copy(f, file)
-
-	// If the file is an image, get its dimensions
-	if strings.HasPrefix(fileInfo.MimeType, "image/") {
-		image, _, err := image.DecodeConfig(f)
-		if err != nil {
-			http.Error(w, "ERR"+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		fileInfo.Width = image.Width
-		fileInfo.Height = image.Height
-	}
 
 	fileInfoJson, err := json.Marshal(fileInfo)
 	if err != nil {
@@ -363,8 +350,7 @@ func galleryHtml(isAdmin bool) string {
 					<p class="text-gray-700">%s</p>
 					<p class="text-sm text-gray-500">Expires: %s</p>
 					<p class="text-sm text-gray-500">Size: %.2f KB</p>
-					<p class="text-sm text-gray-500">Dimensions: %dx%d</p>
-		`, config.Host, fileInfo.Name, config.Host, fileInfo.Name, fileInfo.Name, fileInfo.Name, fileInfo.Description, duration, float64(fileInfo.Size)/1024.0, fileInfo.Width, fileInfo.Height)
+		`, config.Host, fileInfo.Name, config.Host, fileInfo.Name, fileInfo.Name, fileInfo.Name, fileInfo.Description, duration, float64(fileInfo.Size)/1024.0)
 
 		if isAdmin {
 			html += fmt.Sprintf(`
