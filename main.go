@@ -80,7 +80,7 @@ func handlePostRequest(w http.ResponseWriter, r *http.Request) {
 
 	if description != "" {
 		// Prevent XSS hopefully
-		allowedChars := "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ."
+		allowedChars := "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz .():,;!?-_"
 
 		var filteredDescription strings.Builder
 		for _, ch := range description {
