@@ -78,6 +78,19 @@ func handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		description = description[:2048]
 	}
 
+	if description != "" {
+		// Prevent XSS hopefully
+		allowedChars := "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ."
+
+		var filteredDescription strings.Builder
+		for _, ch := range description {
+			if strings.ContainsRune(allowedChars, ch) {
+				filteredDescription.WriteRune(ch)
+			}
+		}
+		description = filteredDescription.String()
+	}
+
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
