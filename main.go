@@ -279,6 +279,11 @@ func main() {
 			return
 		}
 
+		if r.URL.Query().Get("key") != config.AdminGalleryKey {
+			http.NotFound(w, r)
+			return
+		}
+
 		// get the key from the url
 		key := r.URL.Query().Get("delete")
 
@@ -305,37 +310,40 @@ func main() {
 
 		http.ServeFile(w, r, config.FilePath+r.URL.Path[1:])
 
-		// If a file is previewed extend the time by 1 Hour
-		if birdBase.Has([]byte(r.URL.Path[1:])) {
-			valueStr, err := birdBase.Get([]byte(r.URL.Path[1:]))
-			if err != nil {
-				log.Fatal(err)
-			}
+		// if the referer is not from the same host
+		if !strings.Contains(r.Referer(), config.Host) {
+			// If a file is previewed extend the time by 1 Hour
+			if birdBase.Has([]byte(r.URL.Path[1:])) {
+				valueStr, err := birdBase.Get([]byte(r.URL.Path[1:]))
+				if err != nil {
+					log.Fatal(err)
+				}
 
-			var fileInfo FileInfo
-			err = json.Unmarshal(valueStr, &fileInfo)
-			if err != nil {
-				log.Fatal(err)
-			}
+				var fileInfo FileInfo
+				err = json.Unmarshal(valueStr, &fileInfo)
+				if err != nil {
+					log.Fatal(err)
+				}
 
-			// if views is not out of bounds for int
-			if fileInfo.Views < 2147483647 {
-				fileInfo.Views = fileInfo.Views + 1
-			}
+				// if views is not out of bounds for int
+				if fileInfo.Views < 2147483647 {
+					fileInfo.Views = fileInfo.Views + 1
+				}
 
-			// If the fileInfo.KeyExpiry is not out of bounds for int64
-			if fileInfo.KeyExpiry < 9223372036854775807-int64(3600*fileInfo.Views) {
-				fileInfo.KeyExpiry = fileInfo.KeyExpiry + int64(3600*fileInfo.Views)
-			}
+				// If the fileInfo.KeyExpiry is not out of bounds for int64
+				if fileInfo.KeyExpiry < 9223372036854775807-int64(3600*fileInfo.Views) {
+					fileInfo.KeyExpiry = fileInfo.KeyExpiry + int64(3600*fileInfo.Views)
+				}
 
-			fileInfoJson, err := json.Marshal(fileInfo)
-			if err != nil {
-				log.Fatal(err)
-			}
+				fileInfoJson, err := json.Marshal(fileInfo)
+				if err != nil {
+					log.Fatal(err)
+				}
 
-			err = birdBase.Put([]byte(r.URL.Path[1:]), fileInfoJson)
-			if err != nil {
-				log.Fatal(err)
+				err = birdBase.Put([]byte(r.URL.Path[1:]), fileInfoJson)
+				if err != nil {
+					log.Fatal(err)
+				}
 			}
 		}
 
@@ -432,7 +440,7 @@ func galleryHtml(isAdmin bool, sortBy string) string {
 		html += fmt.Sprintf(`
 			<div class="border rounded-lg overflow-hidden">
 				<a href="https://%s/%s" target="_blank">
-					<img class="w-full h-96 object-contain" src="https://%s/%s" alt="%s">
+					<img class="w-full h-96 object-contain" src="https://%s/%s" alt="%s" loading="lazy">
 				</a>
 				<div class="p-4">
 					<h2 class="font-bold mb-2">%s</h2>
