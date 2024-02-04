@@ -63,7 +63,7 @@ func galleryRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// return html with all images
-	fmt.Print(w, galleryHtml(isAdmin, sortBy))
+	fmt.Fprint(w, galleryHtml(isAdmin, sortBy))
 }
 
 func galleryFile(w http.ResponseWriter, r *http.Request) {
