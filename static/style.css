@@ -58,17 +58,103 @@ nav .active {
     color: #282c34;
 }
 
+/* Style for the filter controls container */
+.filter-controls {
+    display: flex;
+    flex-wrap: wrap; /* Allow filters to wrap on smaller desktop screens */
+    align-items: center; /* Vertically align items */
+    justify-content: flex-start; /* MODIFIED: Align controls to the left */
+    padding: 10px 20px;
+    background-color: #2c313a;
+    border-bottom: 1px solid #181a1f;
+    gap: 15px; /* REDUCED gap between filter groups */
+}
+
+/* Individual filter groups */
+.tag-filters,
+.select-filters,
+.search-filter {
+    display: flex;
+    align-items: center;
+    gap: 5px; /* REDUCED Gap within filter groups */
+    flex-wrap: wrap; /* Allow tags to wrap */
+    width: auto; /* ADDED: Ensure groups size naturally on desktop */
+}
+
+/* Remove bottom margin from filter groups by default */
+.filter-controls > div {
+    margin-bottom: 0;
+    /* width: auto; */ /* Let's try applying to the specific groups above */
+}
+
+/* Style tag links */
+.tag-filters a,
+.tag-filters span { /* Include 'Tags:' label */
+    display: inline-block;
+    padding: 5px 10px;
+    background-color: #3e4451;
+    color: #abb2bf;
+    text-decoration: none;
+    border-radius: 4px;
+    border: 1px solid #181a1f;
+    font-size: 0.9em;
+    cursor: pointer;
+    margin-bottom: 5px; /* Add margin for wrapping */
+    margin-right: 5px;
+}
+
+.tag-filters a:hover {
+    background-color: #4b5263;
+}
+
+.tag-filters .active {
+    background-color: #61afef;
+    color: #282c34;
+}
+
+/* Style selects and labels */
+.select-filters label {
+    margin-right: 3px; /* REDUCED */
+    font-size: 0.9em;
+}
+
+.select-filters select {
+    padding: 5px 8px;
+    background-color: #3e4451;
+    color: #abb2bf;
+    border: 1px solid #181a1f;
+    border-radius: 4px;
+    font-size: 0.9em;
+    cursor: pointer;
+}
+
+/* Style search input */
+.search-filter input[type="search"] {
+    padding: 6px 10px;
+    background-color: #3e4451;
+    color: #abb2bf;
+    border: 1px solid #181a1f;
+    border-radius: 4px;
+    font-size: 0.9em;
+    min-width: 150px; /* REDUCED search input min-width */
+}
+
+/* Reset hidden input display */
+.filter-controls input[type="hidden"] {
+    display: none;
+}
+
 /* Remove padding from main container if it's only for gallery */
 main {
     padding: 0; 
 }
 
+/* Base gallery grid layout (Mobile First - 1 column) */
 #gallery-items {
     display: grid;
-    /* Increase min item width */
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); 
-    gap: 0; /* Remove gap */
-    padding: 0; /* Remove padding */
+    grid-template-columns: 1fr; 
+    gap: 0; 
+    padding: 0; 
 }
 
 .gallery-item {
@@ -211,26 +297,6 @@ main {
     max-width: 100%;
     display: block;
     margin: 15px auto;
-}
-
-.detail-preview #viewer { /* For panorama */
-    width: 100%;
-    height: 500px;
-    margin: 15px 0;
-}
-
-.detail-metadata {
-    margin-top: 20px;
-    padding-top: 15px;
-    border-top: 1px solid #3e4451;
-}
-
-.detail-metadata p {
-    margin: 5px 0;
-}
-
-.detail-metadata strong {
-    color: #98c379;
 }
 
 .detail-content {
@@ -492,11 +558,6 @@ main {
     margin-bottom: 20px; /* Add bottom margin */
 }
 
-/* Original detail metadata/content styles might need removal or adjustment */
-/* Remove old .detail-metadata and .detail-content styles if they conflict */
-/*.detail-metadata { ... } */
-/*.detail-content { ... } */
-
 /* Ensure detail page delete button gets red background */
 .action-button.delete-button {
     background-color: #e06c75;
@@ -541,4 +602,77 @@ main {
     background-color: #3e4451;
     color: #abb2bf;
     min-width: 200px; /* Give search some base width */
+}
+
+/* Stack gallery filters */
+.filter-controls {
+    flex-direction: column;
+    align-items: flex-start; /* Align items to start when stacked */
+}
+/* Add some space between stacked filter groups */
+.filter-controls > div { /* Target direct div children */
+    margin-bottom: 10px;
+    box-sizing: border-box; /* Include padding in width calculation */
+}
+.filter-controls > div:last-child {
+    margin-bottom: 0;
+}
+/* Make selects/search fill width */
+.select-filters select,
+.search-filter input {
+    width: 100%;
+    box-sizing: border-box; /* Include padding/border in width */
+}
+
+/* === Mobile Responsiveness === */
+
+/* Apply 2 columns for screens wider than 480px */
+@media (min-width: 481px) {
+    #gallery-items {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Apply auto-fill columns for screens wider than 768px */
+@media (min-width: 769px) {
+    #gallery-items {
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    }
+}
+
+/* Keep other mobile styles below, remove old gallery-items rules from max-width queries */
+@media (max-width: 768px) {
+    /* Detail: Stack info grid */
+    .detail-info-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 480px) {
+    /* Reduce padding slightly */
+    .detail-container {
+        padding: 15px;
+    }
+    .detail-header {
+        padding: 10px 15px;
+    }
+    /* Adjust panorama height to viewport */
+    .detail-preview #panorama-viewer {
+        height: 60vh; /* Use viewport height */
+    }
+    /* Slightly smaller fonts */
+    body {
+        font-size: 0.95em;
+    }
+    header h1 {
+        font-size: 1.3em;
+    }
+    .detail-header h2 {
+        font-size: 1.5em;
+    }
+    /* Smaller action buttons */
+    .action-button {
+        padding: 8px 12px;
+        font-size: 0.9em;
+    }
 }

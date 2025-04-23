@@ -1,0 +1,21 @@
+{
+  "name": "Birdhole",
+  "short_name": "Birdhole",
+  "description": "Simple temporary file sharing",
+  "start_url": "/gallery",
+  "display": "standalone",
+  "background_color": "#282c34",
+  "theme_color": "#21252b",
+  "icons": [
+    {
+      "src": "/static/icons/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icons/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+} 
