@@ -13,52 +13,110 @@
         <!-- Add search/filter controls here if needed later -->
     </header>
 
-    <nav>
-        <ul>
-            <li><a href="/gallery?key={{ .CurrentKey }}" {{ if eq .ActiveTag "" }}class="active"{{ end }}>All</a></li>
-            {{ range .UniqueTags }}
-            <li><a 
-                href="/gallery?key={{ $.CurrentKey }}&tag={{ . }}" 
-                hx-get="/gallery/items?key={{ $.CurrentKey }}&tag={{ . }}" 
-                hx-target="#gallery-items" 
-                hx-push-url="true" 
-                hx-indicator=".htmx-indicator" 
-                {{ if eq $.ActiveTag . }}class="active"{{ end }}>#{{ . }}</a></li>
-            {{ end }}
-        </ul>
-        <div>
-            <label for="sortOrder">Sort by:</label>
-            <select id="sortOrder" 
-                    hx-get="{{ addQuery "/gallery/items" "key" .CurrentKey }}" 
-                    hx-include="[name='tag']" 
-                    hx-target="#gallery-items" 
-                    hx-trigger="change"
-                    hx-push-url="true"
-                    hx-indicator=".htmx-indicator"
-                    name="sort">
-                <option value="new" {{ if ne .SortOrder "old" }}selected{{ end }}>Newest</option>
-                <option value="old" {{ if eq .SortOrder "old" }}selected{{ end }}>Oldest</option>
-            </select>
-            <!-- Hidden input to include tag in sorting request if active -->
-            {{ if .ActiveTag }}
+    {{/* Define the content block that can be swapped by polling */}}
+    {{ block "gallery-content" . }}
+    <div id="gallery-content" 
+         hx-get="/gallery?partial=true{{if .CurrentKey}}&key={{.CurrentKey}}{{end}}" {{/* Poll full gallery with partial flag */}}
+         hx-trigger="every 60s" 
+         hx-swap="outerHTML" {{/* Swap the whole content div */}}
+         hx-indicator=".htmx-indicator"> 
+        <nav>
+            <div class="filter-controls"> 
+                <div class="tag-filters">
+                    <span>Tags:</span>
+                    <a href="/gallery?key={{ .CurrentKey }}" 
+                       hx-get="/gallery/items" 
+                       hx-include="[name='key'], #mimeFilter, #sortOrder, #searchQuery" {{/* Use filter controls directly */}}
+                       hx-vals='{"tag": ""}' {{/* Override tag with JSON */}}
+                       hx-target="#gallery-items" 
+                       hx-push-url="true" 
+                       hx-swap="outerHTML:#gallery-items:transition:true" {{/* Swap outer div */}}
+                       hx-indicator=".htmx-indicator" 
+                       {{ if eq .ActiveTag "" }}class="active"{{ end }}>All</a>
+                    {{ range .UniqueTags }}
+                    <a 
+                        href="/gallery?key={{ $.CurrentKey }}&tag={{ . }}" 
+                        hx-get="/gallery/items" 
+                        hx-include="[name='key'], #mimeFilter, #sortOrder, #searchQuery" {{/* Use filter controls directly */}}
+                        hx-vals='{"tag": "{{ . }}"}' {{/* Override tag with JSON */}}
+                        hx-target="#gallery-items" 
+                        hx-push-url="true" 
+                        hx-swap="outerHTML:#gallery-items:transition:true" {{/* Swap outer div */}}
+                        hx-indicator=".htmx-indicator" 
+                        {{ if eq $.ActiveTag . }}class="active"{{ end }}>#{{ . }}</a>
+                    {{ end }}
+                </div>
+                <div class="select-filters">
+                    <label for="mimeFilter">Type:</label>
+                    <select id="mimeFilter" 
+                            name="mime" 
+                            hx-get="/gallery/items" 
+                            hx-include="[name='key'], [name='tag'], [name='sort'], [name='q']" 
+                            hx-target="#gallery-items" 
+                            hx-swap="outerHTML:#gallery-items:transition:true"
+                            hx-trigger="change"
+                            hx-push-url="true"
+                            hx-indicator=".htmx-indicator">
+                        <option value="" {{ if eq .ActiveMime "" }}selected{{ end }}>All Types</option>
+                        {{ range .UniqueMimeTypes }}
+                        <option value="{{ . }}" {{ if eq $.ActiveMime . }}selected{{ end }}>{{ . }}</option>
+                        {{ end }}
+                    </select>
+
+                    <label for="sortOrder">Sort by:</label>
+                    <select id="sortOrder" 
+                            name="sort"
+                            hx-get="/gallery/items" 
+                            hx-include="[name='key'], [name='tag'], [name='mime'], [name='q']" 
+                            hx-target="#gallery-items" 
+                            hx-swap="outerHTML:#gallery-items:transition:true"
+                            hx-trigger="change"
+                            hx-push-url="true"
+                            hx-indicator=".htmx-indicator">
+                        <option value="new" {{ if ne .SortOrder "old" }}selected{{ end }}>Newest</option>
+                        <option value="old" {{ if eq .SortOrder "old" }}selected{{ end }}>Oldest</option>
+                    </select>
+                </div>
+                 <div class="search-filter"> 
+                    <input type="search" 
+                           id="searchQuery" 
+                           name="q" 
+                           placeholder="Search name/desc..." 
+                           value="{{ .SearchQuery }}" 
+                           hx-get="/gallery/items" 
+                           hx-include="[name='key'], [name='tag'], [name='mime'], [name='sort']" 
+                           hx-target="#gallery-items" 
+                           hx-swap="outerHTML:#gallery-items:transition:true"
+                           hx-trigger="keyup changed delay:500ms, search" 
+                           hx-push-url="true"
+                           hx-indicator=".htmx-indicator">
+                </div>
+            </div>
+
+            <!-- Hidden inputs to store current filter state -->
             <input type="hidden" name="tag" value="{{ .ActiveTag }}">
-            {{ end }}
-        </div>
-    </nav>
+            <input type="hidden" name="mime" value="{{ .ActiveMime }}">
+            <input type="hidden" name="sort" value="{{ .SortOrder | default "new" }}">
+            <input type="hidden" name="q" value="{{ .SearchQuery }}">
+            <input type="hidden" name="key" value="{{ .CurrentKey }}">
 
-    <main>
-        {{/* Loading indicator: Initially hidden, shown during HTMX requests targeting #gallery-items */}}
-        <div class="htmx-indicator loading-indicator">Loading gallery items...</div> 
+        </nav>
 
-        <div id="gallery-items" 
-             {{/* class="htmx-indicator" removed */}} 
-             hx-get="/gallery/items?key={{ .CurrentKey }}{{ if .ActiveTag }}&tag={{ .ActiveTag }}{{ end }}{{ if .SortOrder }}&sort={{ .SortOrder }}{{ end }}" 
-             {{/* hx-trigger="every 60s" */}} {{/* Temporarily disable polling trigger for debugging */}}
-             hx-swap="innerHTML">
-            {{/* Render initial items directly */}}
-            {{ template "gallery_items.html" . }}
-        </div>
-    </main>
+        <main>
+            {{/* Loading indicator: Moved outside swapped area? Or keep inside? Let's keep inside for now */}}
+            <div class="htmx-indicator loading-indicator">Loading gallery items...</div> 
+
+            <div id="gallery-items" 
+                 {{/* hx-get removed - polling is now on #gallery-content */}} 
+                 {{/* hx-trigger removed */}}
+                 {{/* hx-swap removed */}}
+                 >
+                {{/* Render initial items directly */}}
+                {{ template "gallery_items.html" . }}
+            </div>
+        </main>
+    </div> {{/* End #gallery-content */}}
+    {{ end }} {{/* End block "gallery-content" */}}
 
 </body>
 </html>
@@ -69,23 +127,19 @@
     {{ else }}
         {{ range .Files }}
         <div class="gallery-item">
-            {{/* Link to detail still includes key if needed there, but src URLs do not */}}
             <a href="/detail/{{ .Name }}?key={{ $.CurrentKey }}">
                 {{ if eq (printf "%.5s" .MimeType) "image" }}
-                    {{/* Removed loading=lazy */}}
                     <img src="/thumbnail/{{ .Name }}" alt="{{ .Description }}">
                 {{ else if eq (printf "%.5s" .MimeType) "video" }}
-                    {{/* Removed ?key=... from src */}}
                     <video muted loop autoplay src="/{{ .Name }}" title="{{ .Name }}"></video>
                 {{ else if eq (printf "%.5s" .MimeType) "audio" }}
-                     <span class="gallery-item-icon">&#127925;</span> <!-- Music note emoji -->
+                     <span class="gallery-item-icon">&#127925;</span>
                 {{ else if eq (printf "%.4s" .MimeType) "text" }}
                      <div class="gallery-item-text-snippet">{{ .Snippet | default "(Text file)" }}</div>
                 {{ else }}
-                    <span class="gallery-item-icon">&#128196;</span> <!-- Document emoji -->
+                    <span class="gallery-item-icon">&#128196;</span>
                 {{ end }}
                 
-                {{/* Hover Details Overlay */}}
                 <div class="gallery-item-details">
                     <p title="{{ .Name }}"><strong>File:</strong> {{ .Name }}</p>
                     <p><strong>Size:</strong> {{ formatBytes .Size }}</p>
@@ -98,7 +152,6 @@
                 </div>
             </a>
             {{ if $.IsAdmin }}
-                {{/* Delete button using new specific class */}}
                 <button class="gallery-item-delete-button" 
                         hx-delete="/{{ .Name }}?key={{ $.CurrentKey }}" 
                         hx-confirm="Are you sure you want to delete {{ .Name }}?" 
