@@ -1,0 +1,46 @@
+# Birdhole Configuration Example
+
+# Port the application listens on
+Port = "8080" # Default: "8080"
+
+# Address to bind to (0.0.0.0 for all interfaces)
+ListenAddr = "0.0.0.0" # Default: "0.0.0.0"
+
+# Default time before uploaded files expire and are deleted
+# Use units: h (hour), m (minute), s (second)
+# Example: "24h", "72h", "168h" (7 days), "30m"
+DefaultExpiry = "24h" # Default: "24h"
+
+# Path to the Bitcask database directory
+# Relative paths are relative to the application binary
+# Ensure this matches the volume mount in docker-compose.yml if using Docker
+BitcaskPath = "./birdhole.db" # Default: "./birdhole.db"
+
+# REQUIRED: Secret key for uploads (sent as Bearer token)
+UploadKey = "your-strong-upload-secret-key"
+
+# REQUIRED: Secret key for admin actions (sent as Bearer token or query param)
+AdminKey = "your-strong-admin-secret-key"
+
+# Optional: Secret key to view the gallery (sent as query param)
+# If left empty or commented out, the gallery is public.
+GalleryKey = "gallery-view-key"
+
+# REQUIRED: Secret salt for hashing IPs for unique view counts.
+# CHANGE THIS to a long, random, unique string. DO NOT use the default.
+ViewCounterSalt = "default-insecure-change-this-salt"
+
+# Maximum upload size in Megabytes
+MaxUploadSizeMB = 100 # Default: 100
+
+# Base URL for constructing links returned by the API and used in templates
+# Needs trailing slash if not root.
+BaseURL = "/" # Default: "/"
+# Example: BaseURL = "https://example.com/birdhole/"
+
+# Logging level: "debug", "info", "warn", "error"
+LogLevel = "info" # Default: "info"
+
+# How often to scan for and delete expired files
+# Use units: h, m, s
+ExpiryCheckInterval = "10m" # Default: "10m" 

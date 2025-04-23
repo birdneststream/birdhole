@@ -259,7 +259,7 @@ func DecompressContent(compressedData []byte) ([]byte, error) {
 func (s *Storage) IncrementViewCountUnique(ctx context.Context, filename string, clientIP string) error {
 	mKey := metaKey(filename)
 	vhKey := viewHashKey(filename)
-	log := s.log.With("function", "IncrementViewCountUnique", "filename", filename, "clientIP", clientIP)
+	log := s.log.With("function", "IncrementViewCountUnique", "filename", filename)
 
 	// --- Generate Salted Hash ---
 	if s.cfg.ViewCounterSalt == "" {
@@ -273,6 +273,9 @@ func (s *Storage) IncrementViewCountUnique(ctx context.Context, filename string,
 	hashedIPBytes := hasher.Sum(nil)
 	// Use Base64 encoding for storage
 	currentViewHash := base64.StdEncoding.EncodeToString(hashedIPBytes)
+
+	// Add hash to logger context AFTER it's generated
+	log = log.With("clientIPHash", currentViewHash)
 
 	// --- Read-Modify-Write Cycle (Locked) ---
 	s.mu.Lock()

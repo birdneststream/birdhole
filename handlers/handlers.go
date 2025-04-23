@@ -126,6 +126,8 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	defer fileReader.Close()
 
 	originalFilename := fileHeader.Filename
+	logger.Info("Received upload request", "originalFilename", originalFilename)
+
 	ext := filepath.Ext(originalFilename)
 
 	// Get requested URL length

@@ -22,9 +22,9 @@ FROM alpine:latest
 
 WORKDIR /app
 
-# Install runtime dependencies (tzdata for timezones)
+# Install runtime dependencies (tzdata for timezones, mailcap for /etc/mime.types)
 # Add su-exec for dropping privileges in entrypoint
-RUN apk add --no-cache tzdata 'su-exec>=0.2'
+RUN apk add --no-cache tzdata mailcap 'su-exec>=0.2'
 
 # Copy the built binary from the builder stage
 COPY --from=builder /app/birdhole /app/birdhole
