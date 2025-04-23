@@ -25,6 +25,7 @@
             <div class="filter-controls"> 
                 <div class="tag-filters">
                     <span>Tags:</span>
+                    <div id="tag-link-list"> {{/* Container for OOB swap */}}
                     <a href="/gallery?key={{ .CurrentKey }}" 
                        hx-get="/gallery/items" 
                        hx-include="[name='key'], #mimeFilter, #sortOrder, #searchQuery" {{/* Use filter controls directly */}}
@@ -46,6 +47,7 @@
                         hx-indicator=".htmx-indicator" 
                         {{ if eq $.ActiveTag . }}class="active"{{ end }}>#{{ . }}</a>
                     {{ end }}
+                    </div> {{/* End #tag-link-list */}}
                 </div>
                 <div class="select-filters">
                     <label for="mimeFilter">Type:</label>
@@ -162,4 +164,31 @@
         </div>
         {{ end }}
     {{ end }}
+{{ end }}
+
+{{/* Define block for Out-of-Band swap of tag links */}}
+{{ define "tag_links_oob.html" }}
+<div id="tag-link-list" hx-swap-oob="true"> {{/* Target for OOB swap */}}
+    <a href="/gallery?key={{ .CurrentKey }}" 
+       hx-get="/gallery/items" 
+       hx-include="[name='key'], #mimeFilter, #sortOrder, #searchQuery" 
+       hx-vals='{"tag": ""}' 
+       hx-target="#gallery-items" 
+       hx-push-url="true" 
+       hx-swap="outerHTML:#gallery-items:transition:true" 
+       hx-indicator=".htmx-indicator" 
+       {{ if eq .ActiveTag "" }}class="active"{{ end }}>All</a>
+    {{ range .UniqueTags }}
+    <a 
+        href="/gallery?key={{ $.CurrentKey }}&tag={{ . }}" 
+        hx-get="/gallery/items" 
+        hx-include="[name='key'], #mimeFilter, #sortOrder, #searchQuery" 
+        hx-vals='{"tag": "{{ . }}"}' 
+        hx-target="#gallery-items" 
+        hx-push-url="true" 
+        hx-swap="outerHTML:#gallery-items:transition:true" 
+        hx-indicator=".htmx-indicator" 
+        {{ if eq $.ActiveTag . }}class="active"{{ end }}>#{{ . }}</a>
+    {{ end }}
+</div>
 {{ end }} 

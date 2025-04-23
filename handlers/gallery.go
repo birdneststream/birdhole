@@ -24,10 +24,159 @@ import (
 
 // Handlers struct and NewHandlers func removed - should be defined in handlers.go
 
-// renderGallery handles both the full page load and the HTMX partial updates.
-// It fetches, filters, sorts, and prepares data for the gallery templates.
-func (h *Handlers) renderGallery(w http.ResponseWriter, r *http.Request, isPartial bool) {
+// prepareGalleryData fetches, filters, sorts, and prepares data for the gallery templates.
+// It does NOT handle template execution or response writing.
+func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, error) {
 	ctx := r.Context()
+	log := h.Log.With("function", "prepareGalleryData")
+
+	// --- Authentication/Authorization ---
+	queryKey := r.URL.Query().Get("key")
+	isAdmin := queryKey != "" && h.Config.AdminKey != "" && queryKey == h.Config.AdminKey
+
+	// --- Fetch All File Metadata ---
+	allFilesInfo, err := h.Storage.GetAllFilesInfo(ctx)
+	if err != nil {
+		log.Error("Failed to get all files info", "error", err)
+		// Return a generic error; the caller will handle the HTTP response
+		return nil, fmt.Errorf("failed to retrieve file information")
+	}
+	log.Debug("Total files fetched from storage", "count", len(allFilesInfo))
+	// --- End Fetch ---
+
+	// --- Filtering and Sorting ---
+	activeTag := r.URL.Query().Get("tag")
+	sortOrder := r.URL.Query().Get("sort") // Expected: "new" or "old"
+	activeMime := r.URL.Query().Get("mime")
+	searchQuery := r.URL.Query().Get("q")
+
+	log.Debug("Gallery view parameters", "isAdmin", isAdmin, "activeTag", activeTag, "sortOrder", sortOrder, "activeMime", activeMime, "searchQuery", searchQuery)
+
+	var filteredFiles []templates.FileInfoWrapper
+	uniqueTags := make(map[string]struct{})
+	uniqueMimeTypes := make(map[string]struct{})
+
+	for _, fileInfo := range allFilesInfo {
+		isVisible := !fileInfo.Hidden || isAdmin
+		if isVisible {
+			for _, tag := range fileInfo.Tags {
+				if tag != "" {
+					uniqueTags[strings.TrimSpace(tag)] = struct{}{}
+				}
+			}
+			if fileInfo.MimeType != "" {
+				uniqueMimeTypes[fileInfo.MimeType] = struct{}{}
+			}
+		}
+
+		if !isVisible {
+			continue
+		}
+
+		if activeTag != "" {
+			tagFound := false
+			for _, tag := range fileInfo.Tags {
+				if strings.TrimSpace(tag) == activeTag {
+					tagFound = true
+					break
+				}
+			}
+			if !tagFound {
+				continue
+			}
+		}
+
+		if activeMime != "" && fileInfo.MimeType != activeMime {
+			continue
+		}
+
+		if searchQuery != "" {
+			lcQuery := strings.ToLower(searchQuery)
+			nameMatch := strings.Contains(strings.ToLower(fileInfo.Name), lcQuery)
+			descMatch := strings.Contains(strings.ToLower(fileInfo.Description), lcQuery)
+			if !nameMatch && !descMatch {
+				continue
+			}
+		}
+
+		wrapper := templates.FileInfoWrapper{
+			Info:    fileInfo,
+			Key:     queryKey,
+			IsAdmin: isAdmin,
+		}
+
+		if strings.HasPrefix(fileInfo.MimeType, "text/") {
+			storedObj, getErr := h.Storage.GetStoredObject(ctx, fileInfo.Name)
+			if getErr != nil {
+				log.Error("Failed to get stored object for snippet generation", "filename", fileInfo.Name, "error", getErr)
+				wrapper.Snippet = "(Error loading content)"
+			} else {
+				rawContent, decompErr := storage.DecompressContent(storedObj.ContentGz)
+				if decompErr != nil {
+					log.Error("Failed to decompress content for snippet generation", "filename", fileInfo.Name, "error", decompErr)
+					wrapper.Snippet = "(Error reading content)"
+				} else {
+					wrapper.Snippet = truncateString(string(rawContent), 150)
+					if wrapper.Snippet == "" {
+						wrapper.Snippet = "(Empty text file)"
+					}
+				}
+			}
+		}
+
+		filteredFiles = append(filteredFiles, wrapper)
+	}
+	log.Debug("Finished filtering files", "filtered_count", len(filteredFiles))
+
+	if sortOrder == "old" {
+		sort.SliceStable(filteredFiles, func(i, j int) bool {
+			return filteredFiles[i].Info.Timestamp < filteredFiles[j].Info.Timestamp
+		})
+		log.Debug("Sorted files by oldest")
+	} else {
+		sort.SliceStable(filteredFiles, func(i, j int) bool {
+			return filteredFiles[i].Info.Timestamp > filteredFiles[j].Info.Timestamp
+		})
+		if sortOrder != "" && sortOrder != "new" {
+			log.Warn("Invalid sort order received, defaulting to newest", "sortOrder", sortOrder)
+		}
+		log.Debug("Sorted files by newest (default)")
+	}
+	// --- End Filtering and Sorting ---
+
+	// --- Prepare Template Data Map ---
+	tagList := make([]string, 0, len(uniqueTags))
+	for tag := range uniqueTags {
+		tagList = append(tagList, tag)
+	}
+	sort.Strings(tagList)
+
+	mimeList := make([]string, 0, len(uniqueMimeTypes))
+	for mime := range uniqueMimeTypes {
+		mimeList = append(mimeList, mime)
+	}
+	sort.Strings(mimeList)
+
+	data := map[string]interface{}{
+		"Files":           filteredFiles,
+		"UniqueTags":      tagList,
+		"ActiveTag":       activeTag,
+		"UniqueMimeTypes": mimeList,
+		"ActiveMime":      activeMime,
+		"SortOrder":       sortOrder,
+		"SearchQuery":     searchQuery,
+		"CurrentKey":      queryKey,
+		"IsAdmin":         isAdmin,
+		"RefreshParam":    fmt.Sprintf("?ts=%d", time.Now().UnixNano()), // Still useful for cache busting if needed
+	}
+	// --- End Template Data ---
+
+	return data, nil // Return the prepared data and no error
+}
+
+// renderGallery handles both the full page load and the HTMX partial updates.
+// It now calls prepareGalleryData and then executes the appropriate template.
+func (h *Handlers) renderGallery(w http.ResponseWriter, r *http.Request, isPartial bool) {
 	log := h.Log.With("handler", "renderGallery")
 
 	// Determine the correct template name/block based on the request context
@@ -53,184 +202,32 @@ func (h *Handlers) renderGallery(w http.ResponseWriter, r *http.Request, isParti
 
 	// Sanity check - ensure a template name was set
 	if templateName == "" {
-		// This case should ideally not be reached with the logic above
 		log.Error("Could not determine template name", "path", r.URL.Path, "isPartial", isPartial)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	// --- END REVISED TEMPLATE LOGIC ---
 
-	// --- Authentication/Authorization ---
-	// For the public gallery route, admin status for display purposes
-	// is determined directly by the query key, as AuthCheck middleware isn't applied.
-	queryKey := r.URL.Query().Get("key")
-	isAdmin := queryKey != "" && h.Config.AdminKey != "" && queryKey == h.Config.AdminKey
-
-	// --- Fetch All File Metadata ---
-	allFilesInfo, err := h.Storage.GetAllFilesInfo(ctx)
+	// --- Prepare Data ---
+	data, err := h.prepareGalleryData(r)
 	if err != nil {
-		log.Error("Failed to get all files info", "error", err)
-		// Render error message suitable for HTMX swap
+		// prepareGalleryData already logged the underlying error
+		log.Error("Failed to prepare gallery data", "error", err)
+		// Render error message suitable for HTMX swap or full page
 		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `<div class="error-message">Error loading files. Please try again later.</div>`) // Simple error feedback
+		// TODO: Consider rendering an error template block instead of raw HTML?
+		fmt.Fprintf(w, `<div class="error-message">Error preparing gallery data. Please try again later.</div>`)
 		return
 	}
-	log.Debug("Total files fetched from storage", "count", len(allFilesInfo))
-	// --- End Fetch ---
 
-	// --- Filtering and Sorting ---
-	activeTag := r.URL.Query().Get("tag")
-	sortOrder := r.URL.Query().Get("sort")  // Expected: "new" or "old"
-	activeMime := r.URL.Query().Get("mime") // ADDED: Get mime type filter
-	searchQuery := r.URL.Query().Get("q")   // ADDED: Get search query
-
-	log.Debug("Gallery view parameters", "isAdmin", isAdmin, "activeTag", activeTag, "sortOrder", sortOrder, "activeMime", activeMime, "searchQuery", searchQuery) // ADDED searchQuery
-
-	// Use FileInfoWrapper to include Snippet
-	var filteredFiles []templates.FileInfoWrapper // Changed type here
-	uniqueTags := make(map[string]struct{})       // Using map as a set for unique tags
-	uniqueMimeTypes := make(map[string]struct{})  // ADDED: Map for unique mime types
-
-	for _, fileInfo := range allFilesInfo {
-		log.Debug("Processing file for gallery", "filename", fileInfo.Name, "hidden", fileInfo.Hidden, "tags", fileInfo.Tags)
-
-		// Collect all unique tags and mime types from accessible files
-		isVisible := !fileInfo.Hidden || isAdmin
-		if isVisible {
-			for _, tag := range fileInfo.Tags {
-				if tag != "" {
-					uniqueTags[strings.TrimSpace(tag)] = struct{}{} // Trim spaces from tags
-				}
-			}
-			// ADDED: Collect unique mime types
-			if fileInfo.MimeType != "" {
-				uniqueMimeTypes[fileInfo.MimeType] = struct{}{}
-			}
-		}
-
-		// Apply Filters:
-		// 1. Visibility Filter (already checked by isVisible)
-		if !isVisible {
-			continue // Skip hidden files if not admin
-		}
-
-		// 2. Tag Filter (Apply only if activeTag is provided)
-		if activeTag != "" {
-			// *** FIXED LOGIC HERE ***
-			tagFound := false
-			for _, tag := range fileInfo.Tags {
-				if strings.TrimSpace(tag) == activeTag {
-					tagFound = true
-					break
-				}
-			}
-			if !tagFound {
-				log.Debug("Skipping file due to tag mismatch", "filename", fileInfo.Name, "activeTag", activeTag)
-				continue // Skip if tag filter is active and file doesn't have the tag
-			}
-		}
-
-		// 3. MIME Type Filter (Apply only if activeMime is provided)
-		if activeMime != "" && fileInfo.MimeType != activeMime {
-			log.Debug("Skipping file due to MIME type mismatch", "filename", fileInfo.Name, "activeMime", activeMime, "fileMime", fileInfo.MimeType)
-			continue
-		}
-
-		// 4. Search Query Filter (Apply only if searchQuery is provided) - ADDED
-		if searchQuery != "" {
-			lcQuery := strings.ToLower(searchQuery)
-			nameMatch := strings.Contains(strings.ToLower(fileInfo.Name), lcQuery)
-			descMatch := strings.Contains(strings.ToLower(fileInfo.Description), lcQuery)
-			if !nameMatch && !descMatch {
-				log.Debug("Skipping file due to search query mismatch", "filename", fileInfo.Name, "searchQuery", searchQuery)
-				continue
-			}
-		}
-
-		// Create FileInfoWrapper
-		wrapper := templates.FileInfoWrapper{
-			Info:    fileInfo, // Embed the original file.Info
-			Key:     queryKey, // Pass key for potential use in item template
-			IsAdmin: isAdmin,
-		}
-
-		// Generate snippet for text files
-		if strings.HasPrefix(fileInfo.MimeType, "text/") {
-			// Need to fetch the full object to get content
-			storedObj, getErr := h.Storage.GetStoredObject(ctx, fileInfo.Name)
-			if getErr != nil {
-				log.Error("Failed to get stored object for snippet generation", "filename", fileInfo.Name, "error", getErr)
-				// Decide how to handle: skip snippet, show error, etc.
-				wrapper.Snippet = "(Error loading content)"
-			} else {
-				rawContent, decompErr := storage.DecompressContent(storedObj.ContentGz)
-				if decompErr != nil {
-					log.Error("Failed to decompress content for snippet generation", "filename", fileInfo.Name, "error", decompErr)
-					wrapper.Snippet = "(Error reading content)"
-				} else {
-					// Use the truncateString helper (already defined in handlers.go)
-					wrapper.Snippet = truncateString(string(rawContent), 150) // Truncate to 150 chars
-					if wrapper.Snippet == "" {
-						wrapper.Snippet = "(Empty text file)" // Handle empty content after truncation
-					}
-				}
-			}
-		}
-
-		// If the file passed all filters, add it to the list
-		log.Debug("Adding file to filtered list", "filename", fileInfo.Name)
-		filteredFiles = append(filteredFiles, wrapper) // Append the wrapper
+	// Extract item count for logging *after* data preparation is successful
+	itemCount := 0
+	if files, ok := data["Files"].([]templates.FileInfoWrapper); ok {
+		itemCount = len(files)
 	}
-	log.Debug("Finished filtering files", "filtered_count", len(filteredFiles))
-
-	// Apply Sorting
-	if sortOrder == "old" {
-		sort.SliceStable(filteredFiles, func(i, j int) bool {
-			return filteredFiles[i].Info.Timestamp < filteredFiles[j].Info.Timestamp
-		})
-		log.Debug("Sorted files by oldest")
-	} else { // Default to "new" (including invalid sortOrder values)
-		sort.SliceStable(filteredFiles, func(i, j int) bool {
-			return filteredFiles[i].Info.Timestamp > filteredFiles[j].Info.Timestamp
-		})
-		if sortOrder != "" && sortOrder != "new" {
-			log.Warn("Invalid sort order received, defaulting to newest", "sortOrder", sortOrder)
-		}
-		log.Debug("Sorted files by newest (default)")
-	}
-	// --- End Filtering and Sorting ---
-
-	// --- Prepare Template Data ---
-	// Convert unique tags map to sorted list
-	tagList := make([]string, 0, len(uniqueTags))
-	for tag := range uniqueTags {
-		tagList = append(tagList, tag)
-	}
-	sort.Strings(tagList) // Keep tag list sorted for consistent display
-
-	// Convert unique mime types map to sorted list - ADDED
-	mimeList := make([]string, 0, len(uniqueMimeTypes))
-	for mime := range uniqueMimeTypes {
-		mimeList = append(mimeList, mime)
-	}
-	sort.Strings(mimeList) // Keep mime list sorted
-
-	data := map[string]interface{}{
-		"Files":           filteredFiles,
-		"UniqueTags":      tagList,
-		"ActiveTag":       activeTag,
-		"UniqueMimeTypes": mimeList,   // ADDED
-		"ActiveMime":      activeMime, // ADDED
-		"SortOrder":       sortOrder,
-		"SearchQuery":     searchQuery, // ADDED
-		"CurrentKey":      queryKey,    // Pass original query key for constructing links/URLs in template
-		"IsAdmin":         isAdmin,
-		"RefreshParam":    fmt.Sprintf("?ts=%d", time.Now().UnixNano()), // Basic cache buster for polling
-	}
-	// --- End Template Data ---
 
 	// --- Render Template ---
-	log.Info("Rendering gallery template", "template_target", templateName, "item_count", len(filteredFiles))
+	log.Info("Rendering gallery template", "template_target", templateName, "item_count", itemCount)
 	err = h.Tmpl.ExecuteTemplate(w, templateName, data)
 	if err != nil {
 		// Log the error, but avoid writing a second HTTP error response if one was already sent (e.g., 500 earlier)
@@ -288,25 +285,44 @@ func (h *Handlers) GalleryItemsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// If it IS an HTMX request, proceed to render just the items block.
 
-	// This handler always renders just the items template block.
-	// We still call renderGallery to fetch and filter data,
-	// but we will explicitly execute the items template.
-	// log := h.Log.With("handler", "GalleryItemsHandler") // REMOVED unused variable
+	// --- REFACTORED LOGIC for HTMX ---
+	log := h.Log.With("handler", "GalleryItemsHandler", "request_type", "htmx")
 
-	// Fetch and prepare data using a simplified call or dedicated function?
-	// For now, reuse renderGallery but ignore its template execution.
-	// We need the data map it prepares.
+	// 1. Prepare data
+	data, err := h.prepareGalleryData(r)
+	if err != nil {
+		log.Error("Failed to prepare gallery data for HTMX items request", "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		// Send a simple error message back for the swap
+		fmt.Fprintf(w, `<div id="gallery-items"><div class="error-message">Error loading gallery items.</div></div>`)
+		return
+	}
 
-	// PROBLEM: renderGallery *executes* a template. We need the data *before* execution.
-	// Let's refactor renderGallery to separate data prep from execution.
+	// 2. Render Out-of-Band tag links first
+	log.Debug("Rendering OOB tag links")
+	err = h.Tmpl.ExecuteTemplate(w, "tag_links_oob.html", data)
+	if err != nil {
+		// Log error, but continue to attempt rendering items
+		log.Error("Failed to execute tag_links_oob.html template", "error", err)
+		// Don't return here, maybe items will still render
+	}
 
-	// TODO: Refactor renderGallery to return data map + chosen template name?
-	// Temporary workaround: Call renderGallery and hope it executes the right block
-	// based on the path check inside it.
-	// This relies on renderGallery correctly identifying templateName = "gallery_items.html"
-	h.renderGallery(w, r, true)
+	// 3. Render main gallery items block
+	log.Debug("Rendering gallery items block")
+	err = h.Tmpl.ExecuteTemplate(w, "gallery_items.html", data)
+	if err != nil {
+		// Log error. If OOB also failed, headers might not be written yet.
+		log.Error("Failed to execute gallery_items.html template", "error", err)
+		if _, ok := w.Header()["Content-Type"]; !ok {
+			// Only write header if nothing has been successfully written yet
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		// Don't write body again if OOB might have partially succeeded
+	}
 
-	// --- REFACTOR NEEDED ---
+	// --- END REFACTORED LOGIC for HTMX ---
+
+	// --- REFACTOR NEEDED --- // REMOVED OLD COMMENT BLOCK
 	// Ideal structure:
 	// 1. Call a function like prepareGalleryData(r) -> (data, error)
 	// 2. Check error
