@@ -37,9 +37,11 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 
 	// --- Access Control Check ---
 	queryKey := r.URL.Query().Get("key")
+	// Use GalleryKey for gallery access control, but also allow AdminKey
 	if h.Config.GalleryKey != "" { // Check if a gallery key is required
-		if queryKey != h.Config.GalleryKey { // Check if provided key is incorrect
-			log.Warn("Invalid gallery access key provided", "provided_key", queryKey)
+		// Deny access ONLY if GalleryKey is required AND the provided key matches neither GalleryKey nor AdminKey
+		if queryKey != h.Config.GalleryKey && queryKey != h.Config.AdminKey {
+			log.Warn("Invalid gallery access key provided (neither GalleryKey nor AdminKey matched)", "provided_key", queryKey)
 			return nil, ErrInvalidAccessKey // Return specific error
 		}
 	}
