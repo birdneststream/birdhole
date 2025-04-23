@@ -15,6 +15,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -110,6 +111,16 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// --- Read file content --- ADDED
+	// Need to read the content here to calculate dimensions before saving metadata
+	// Ensure fileReader is still closed via defer earlier
+	contentBytes, err := io.ReadAll(fileReader)
+	if err != nil {
+		// Handle error reading file content before storage attempt
+		httpError(w, logger, "Failed to read file content", err, http.StatusInternalServerError)
+		return
+	}
+
 	// Generate unique filename with specified length
 	uniqueFilename, err := h.Storage.GenerateUniqueFilename(r.Context(), ext, urlLen)
 	if err != nil {
@@ -127,13 +138,11 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Parse optional form values
 	description := r.FormValue("description")
+	message := r.FormValue("message")
 	tagsStr := r.FormValue("tags")
 	hiddenStr := r.FormValue("hidden")
 	expiryDurationStr := r.FormValue("expiry_duration")
 	panoramaStr := r.FormValue("panorama")
-
-	// Sanitize description (simple escape)
-	description = template.HTMLEscapeString(description)
 
 	// Process tags
 	var tags []string
@@ -192,18 +201,35 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// --- End Process Custom Metadata ---
 
+	// --- Calculate Image Dimensions --- // ADDED
+	var width, height int
+	if strings.HasPrefix(mimeType, "image/") {
+		imgConfig, _, err := image.DecodeConfig(bytes.NewReader(contentBytes))
+		if err != nil {
+			// Log error but don't fail the upload
+			logger.Warn("Could not decode image config to get dimensions", "filename", originalFilename, "error", err)
+		} else {
+			width = imgConfig.Width
+			height = imgConfig.Height
+			logger.Debug("Calculated image dimensions", "width", width, "height", height)
+		}
+	}
+	// --- End Calculate Image Dimensions ---
+
 	fileInfo := file.Info{
 		Name:        uniqueFilename,
 		Description: description,
+		Message:     message,
 		Hidden:      hidden,
 		Tags:        tags,
 		Meta:        meta, // Assign the parsed metadata map
 		MimeType:    mimeType,
-		Size:        fileHeader.Size, // Original size
+		Size:        fileHeader.Size, // Original size (fileHeader.Size is fine here)
 		Timestamp:   time.Now().Unix(),
 		KeyExpiry:   expiryTime,
 		Panorama:    panorama,
-		// Width, Height, Hash, etc., could be added here if calculated
+		Width:       width,  // Assign calculated width
+		Height:      height, // Assign calculated height
 	}
 
 	if err := fileInfo.Validate(); err != nil {
@@ -211,8 +237,8 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the file
-	err = h.Storage.PutFile(r.Context(), uniqueFilename, fileInfo, fileReader)
+	// Store the file (passing contentBytes)
+	err = h.Storage.PutFile(r.Context(), uniqueFilename, fileInfo, contentBytes)
 	if err != nil {
 		httpError(w, logger, "Failed to store file", err, http.StatusInternalServerError)
 		return

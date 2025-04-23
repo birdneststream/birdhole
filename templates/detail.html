@@ -21,6 +21,7 @@
         <a href="/gallery?key={{ .Key }}" class="back-link">&larr; Back to Gallery</a>
         <h2>{{ .Info.Name }}</h2>
         {{ if .Info.Description }}<p class="detail-description">{{ .Info.Description }}</p>{{ end }}
+        {{ if .Info.Message }}<p class="detail-message">{{ .Info.Message }}</p>{{ end }}
     </div>
 
     <div class="detail-container">
@@ -104,8 +105,14 @@
             {{/* Actions block - Download always visible, Delete is Admin only */}}
             <div class="info-block">
                 <h3>Actions</h3>
+                {{/* View button - Opens raw file in new tab */}}
+                <a href="/{{ .Info.Name }}" 
+                   target="_blank" 
+                   class="action-button view-button"> 
+                   View
+                </a>
                 {{/* Download button accessible to all viewers */}}
-                <a href="/{{ .Info.Name }}?key={{ .Key }}" 
+                <a href="/{{ .Info.Name }}" 
                    class="action-button download-button" 
                    download="{{ .Info.Name }}"> 
                    Download

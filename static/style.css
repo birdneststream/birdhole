@@ -432,6 +432,16 @@ main {
     background-color: #529bcf;
 }
 
+/* NEW styles for the View button */
+.view-button {
+    background-color: #56b6c2; /* Teal/Cyan color */
+    color: #282c34;
+}
+
+.view-button:hover {
+    background-color: #46a1ab;
+}
+
 /* Custom Metadata Table */
 .metadata-block table {
     width: 100%;
@@ -481,7 +491,7 @@ main {
 
 /* Ensure detail page delete button gets red background */
 .action-button.delete-button {
-    background-color: #e06c75; 
+    background-color: #e06c75;
     color: #282c34;
 }
 

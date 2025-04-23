@@ -35,9 +35,9 @@ func Init() {
 	// Use Bluemonday's UGC policy as a base - allows common formatting and links
 	sanitizer = bluemonday.UGCPolicy()
 	// Add policies for tables if needed
-	// sanitizer.AllowTables()
+	sanitizer.AllowTables()
 	// Add policies for task lists if needed
-	// sanitizer.AllowElements("input").AllowAttrs("type", "disabled", "checked").OnElements("input")
+	sanitizer.AllowElements("input").AllowAttrs("type", "disabled", "checked").OnElements("input")
 
 	// Allow specific classes for syntax highlighting if using a library like highlight.js
 	// sanitizer.AllowAttrs("class").Matching(regexp.MustCompile(`^language-\w+$`)).OnElements("code")

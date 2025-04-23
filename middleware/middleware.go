@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // Context keys
@@ -20,47 +23,86 @@ const ClientIPContextKey = contextKey("clientIP")
 
 // Middleware holds dependencies for middleware handlers.
 type Middleware struct {
-	log *slog.Logger
+	log            *slog.Logger
+	rateLimiters   map[string]*rate.Limiter
+	rateLimitMutex sync.Mutex
+	rateLimitR     rate.Limit
+	rateLimitB     int
 }
 
 // New creates a new Middleware instance.
 func New(logger *slog.Logger) *Middleware {
+	r := rate.Limit(2)
+	b := 4
+
 	return &Middleware{
-		log: logger.With("component", "middleware"),
+		log:          logger.With("component", "middleware"),
+		rateLimiters: make(map[string]*rate.Limiter),
+		rateLimitR:   r,
+		rateLimitB:   b,
 	}
+}
+
+// getClientIP extracts the client IP address (helper function)
+// Uses same logic as ClientIP middleware, but reusable
+func getClientIP(r *http.Request) string {
+	clientIP := ""
+	cfIP := r.Header.Get("CF-Connecting-IP")
+	if cfIP != "" {
+		clientIP = cfIP
+	} else {
+		xff := r.Header.Get("X-Forwarded-For")
+		if xff != "" {
+			parts := strings.Split(xff, ",")
+			if len(parts) > 0 {
+				clientIP = strings.TrimSpace(parts[0])
+			}
+		}
+	}
+	if clientIP == "" {
+		remoteAddr := r.RemoteAddr
+		ip, _, err := net.SplitHostPort(remoteAddr)
+		if err == nil {
+			clientIP = ip
+		} else {
+			clientIP = remoteAddr
+		}
+	}
+	return clientIP
+}
+
+// RateLimit middleware - ADDED
+func (m *Middleware) RateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := getClientIP(r)
+
+		m.rateLimitMutex.Lock()
+		limiter, exists := m.rateLimiters[ip]
+		if !exists {
+			// Create a new limiter for this IP if it doesn't exist
+			limiter = rate.NewLimiter(m.rateLimitR, m.rateLimitB)
+			m.rateLimiters[ip] = limiter
+		}
+		m.rateLimitMutex.Unlock()
+
+		if !limiter.Allow() {
+			// Log the rate limit event
+			m.log.Warn("Rate limit exceeded", "client_ip", ip, "path", r.URL.Path)
+			// Return 429 Too Many Requests
+			w.Header().Set("Retry-After", "60") // Suggest retrying after 60 seconds
+			http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ClientIP attempts to extract the real client IP address, considering reverse proxy headers.
 func (m *Middleware) ClientIP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clientIP := ""
-		// Check Cloudflare header first
-		cfIP := r.Header.Get("CF-Connecting-IP")
-		if cfIP != "" {
-			clientIP = cfIP
-		} else {
-			// Fallback to X-Forwarded-For
-			xff := r.Header.Get("X-Forwarded-For")
-			if xff != "" {
-				// XFF can contain a list of IPs, the first one is usually the client
-				parts := strings.Split(xff, ",")
-				if len(parts) > 0 {
-					clientIP = strings.TrimSpace(parts[0])
-				}
-			}
-		}
-
-		// If no proxy headers, use RemoteAddr
-		if clientIP == "" {
-			remoteAddr := r.RemoteAddr
-			ip, _, err := net.SplitHostPort(remoteAddr)
-			if err == nil {
-				clientIP = ip
-			} else {
-				clientIP = remoteAddr // Could be just IP without port
-			}
-		}
-
+		// Use the helper function
+		clientIP := getClientIP(r)
 		// Store client IP in context
 		ctx := context.WithValue(r.Context(), ClientIPContextKey, clientIP)
 		next.ServeHTTP(w, r.WithContext(ctx))

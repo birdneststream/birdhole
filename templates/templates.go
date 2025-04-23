@@ -22,9 +22,9 @@ var (
 		"formatDate":  formatDate,
 		"formatBytes": formatBytes,
 		"joinTags":    joinTags,
-		"truncate":    truncateString,
-		"addQuery":    addQueryParam,
-		"default":     defaultFunc,
+		// "truncate":    truncateString, // Removed - Helper exists in handlers pkg, not used directly in tmpl?
+		"addQuery": addQueryParam,
+		"default":  defaultFunc,
 	}
 )
 
@@ -74,13 +74,6 @@ func formatBytes(b int64) string {
 
 func joinTags(tags []string) string {
 	return strings.Join(tags, ", ")
-}
-
-func truncateString(s string, length int) string {
-	if len(s) <= length {
-		return s
-	}
-	return s[:length] + "..."
 }
 
 // addQueryParam adds or replaces a query parameter in a URL string (relative or absolute).

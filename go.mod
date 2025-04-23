@@ -22,4 +22,5 @@ require (
 	golang.org/x/image v0.26.0 // indirect
 	golang.org/x/net v0.26.0 // indirect
 	golang.org/x/sys v0.21.0 // indirect
+	golang.org/x/time v0.11.0 // indirect
 )

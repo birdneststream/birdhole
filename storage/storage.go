@@ -134,15 +134,12 @@ func (s *Storage) GenerateUniqueFilename(ctx context.Context, extension string, 
 }
 
 // PutFile stores the file metadata and content under separate keys, compressing the content.
-func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, content io.Reader) error {
+// Accepts content as bytes instead of io.Reader.
+func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, contentBytes []byte) error {
 	mKey := metaKey(filename)
 	fKey := fileKey(filename)
 
-	// Read content
-	contentBytes, err := io.ReadAll(content)
-	if err != nil {
-		return fmt.Errorf("failed to read file content: %w", err)
-	}
+	// Content already read into contentBytes
 
 	// Compress content
 	var compressedBuf bytes.Buffer

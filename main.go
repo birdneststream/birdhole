@@ -90,12 +90,13 @@ func main() {
 
 	// --- Authenticated routes ---
 	// Upload (requires upload key)
-	mux.Handle("POST /hole", mw.ClientIP(mw.AuthCheck(&config.AppConfig, false, true, false)(mw.Logging(http.HandlerFunc(handlerDeps.UploadHandler)))))
+	mux.Handle("POST /hole", mw.ClientIP(mw.RateLimit(mw.AuthCheck(&config.AppConfig, false, true, false)(mw.Logging(http.HandlerFunc(handlerDeps.UploadHandler))))))
 	// Delete (requires admin key)
-	mux.Handle("DELETE /{filename}", mw.ClientIP(mw.AuthCheck(&config.AppConfig, false, false, true)(mw.Logging(http.HandlerFunc(handlerDeps.DeleteHandler)))))
+	mux.Handle("DELETE /{filename}", mw.ClientIP(mw.RateLimit(mw.AuthCheck(&config.AppConfig, false, false, true)(mw.Logging(http.HandlerFunc(handlerDeps.DeleteHandler))))))
 
 	// Apply global middleware (Recovery should be first, then SecurityHeaders)
 	// Note: ClientIP was moved to wrap individual routes for logging accuracy
+	// Note: RateLimit applied per-route to sensitive endpoints
 	finalHandler := mw.Recovery(mw.SecurityHeaders(mux))
 
 	// Configure server
