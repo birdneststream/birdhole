@@ -17,6 +17,7 @@
     {{ block "gallery-content" . }}
     <div id="gallery-content" 
          hx-get="/gallery?partial=true{{if .CurrentKey}}&key={{.CurrentKey}}{{end}}" {{/* Poll full gallery with partial flag */}}
+         hx-include="[name='key'], [name='tag'], [name='mime'], [name='sort'], [name='q']" {{/* Include current filters */}}
          hx-trigger="every 60s" 
          hx-swap="outerHTML" {{/* Swap the whole content div */}}
          hx-indicator=".htmx-indicator"> 
