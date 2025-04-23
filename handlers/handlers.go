@@ -31,6 +31,9 @@ import (
 	"github.com/disintegration/imaging"
 )
 
+// Define specific error for invalid key access
+var ErrInvalidAccessKey = errors.New("invalid gallery access key")
+
 // Regex to validate expected filename format: 6-16 lowercase base32 chars + optional extension.
 var validFilenameRegex = regexp.MustCompile(`^[a-z0-9]{6,16}(\.[a-zA-Z0-9]+)?$`)
 
@@ -244,10 +247,25 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Construct the full URL using BaseURL from config
+	// Construct the base URL
 	baseURL := h.Config.BaseURL
-	// Ensure baseURL ends with / and filename doesn't start with / for clean join
-	fullURL := baseURL + strings.TrimPrefix(uniqueFilename, "/")
+
+	// --- Determine Response URL ---
+	var responseURL string
+	isText := strings.HasPrefix(fileInfo.MimeType, "text/")
+	isPanorama := fileInfo.Panorama // Use the correct field name from file.Info
+
+	if isText || isPanorama {
+		// Use detail URL (path only, no key)
+		// NOTE: Assumes BaseURL is correctly configured (e.g., "http://localhost:9999/")
+		detailPath := fmt.Sprintf("detail/%s", uniqueFilename) // No key parameter
+		responseURL = baseURL + strings.TrimPrefix(detailPath, "/")
+	} else {
+		// Use direct file URL (no key)
+		responseURL = baseURL + strings.TrimPrefix(uniqueFilename, "/")
+	}
+	logger.Debug("Determined response URL", "url", responseURL, "isText", isText, "isPanorama", isPanorama)
+	// --- End Determine Response URL ---
 
 	// Define response struct
 	type uploadResponse struct {
@@ -255,7 +273,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Prepare JSON response
-	resp := uploadResponse{URL: fullURL}
+	resp := uploadResponse{URL: responseURL} // Use the determined URL
 	jsonResp, err := json.Marshal(resp)
 	if err != nil {
 		// Log the marshalling error, but maybe still return plain text URL as fallback?
@@ -269,7 +287,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(jsonResp)
-	logger.Info("File uploaded successfully", "filename", uniqueFilename, "url", fullURL)
+	logger.Info("File uploaded successfully", "filename", uniqueFilename, "url", responseURL) // Use determined URL
 }
 
 // FileServingHandler serves the raw file content.

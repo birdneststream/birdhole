@@ -18,7 +18,10 @@
 </head>
 <body>
     <div class="detail-header">
-        <a href="/gallery?key={{ .Key }}" class="back-link">&larr; Back to Gallery</a>
+        {{/* Only show Back to Gallery link if a key was provided for the detail view */}}
+        {{ if .Key }}
+            <a href="/gallery?key={{ .Key }}" class="back-link">&larr; Back to Gallery</a>
+        {{ end }}
         <h2>{{ .Info.Name }}</h2>
         {{ if .Info.Description }}<p class="detail-description">{{ .Info.Description }}</p>{{ end }}
         {{ if .Info.Message }}<p class="detail-message">{{ .Info.Message }}</p>{{ end }}

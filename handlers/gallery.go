@@ -2,6 +2,8 @@ package handlers
 
 import (
 	// Added for error checking
+
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -22,6 +24,9 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
+// Define specific error for invalid key access
+// var ErrInvalidAccessKey = errors.New("invalid gallery access key") // REMOVED - Assuming defined in handlers.go
+
 // Handlers struct and NewHandlers func removed - should be defined in handlers.go
 
 // prepareGalleryData fetches, filters, sorts, and prepares data for the gallery templates.
@@ -30,8 +35,19 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 	ctx := r.Context()
 	log := h.Log.With("function", "prepareGalleryData")
 
-	// --- Authentication/Authorization ---
+	// --- Access Control Check ---
 	queryKey := r.URL.Query().Get("key")
+	if h.Config.GalleryKey != "" { // Check if a gallery key is required
+		if queryKey != h.Config.GalleryKey { // Check if provided key is incorrect
+			log.Warn("Invalid gallery access key provided", "provided_key", queryKey)
+			return nil, ErrInvalidAccessKey // Return specific error
+		}
+	}
+	// --- End Access Control Check ---
+
+	// --- Authentication/Authorization (for admin features *inside* gallery) ---
+	// This uses AdminKey, separate from gallery access.
+	// queryKey already fetched above
 	isAdmin := queryKey != "" && h.Config.AdminKey != "" && queryKey == h.Config.AdminKey
 
 	// --- Fetch All File Metadata ---
@@ -211,12 +227,17 @@ func (h *Handlers) renderGallery(w http.ResponseWriter, r *http.Request, isParti
 	// --- Prepare Data ---
 	data, err := h.prepareGalleryData(r)
 	if err != nil {
-		// prepareGalleryData already logged the underlying error
-		log.Error("Failed to prepare gallery data", "error", err)
-		// Render error message suitable for HTMX swap or full page
-		w.WriteHeader(http.StatusInternalServerError)
-		// TODO: Consider rendering an error template block instead of raw HTML?
-		fmt.Fprintf(w, `<div class="error-message">Error preparing gallery data. Please try again later.</div>`)
+		// Check if the error is specifically invalid access key
+		if errors.Is(err, ErrInvalidAccessKey) {
+			// prepareGalleryData already logged the warning
+			http.NotFound(w, r) // Return 404 for invalid key
+		} else {
+			// Handle other errors during data preparation
+			log.Error("Failed to prepare gallery data", "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			// TODO: Consider rendering an error template block instead of raw HTML?
+			fmt.Fprintf(w, `<div class="error-message">Error preparing gallery data. Please try again later.</div>`)
+		}
 		return
 	}
 
@@ -291,10 +312,20 @@ func (h *Handlers) GalleryItemsHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Prepare data
 	data, err := h.prepareGalleryData(r)
 	if err != nil {
-		log.Error("Failed to prepare gallery data for HTMX items request", "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		// Send a simple error message back for the swap
-		fmt.Fprintf(w, `<div id="gallery-items"><div class="error-message">Error loading gallery items.</div></div>`)
+		// Check if the error is specifically invalid access key
+		if errors.Is(err, ErrInvalidAccessKey) {
+			// prepareGalleryData already logged the warning
+			// For HTMX, return 404 but maybe with a minimal response that HTMX can swap?
+			// Or let HTMX handle the 404 status directly.
+			// Let's just return 404, HTMX might show its default error handling.
+			http.NotFound(w, r)
+		} else {
+			// Handle other errors during data preparation
+			log.Error("Failed to prepare gallery data for HTMX items request", "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			// Send a simple error message back for the swap
+			fmt.Fprintf(w, `<div id="gallery-items"><div class="error-message">Error loading gallery items.</div></div>`)
+		}
 		return
 	}
 
