@@ -20,8 +20,8 @@ import (
 
 func main() {
 	// Setup structured logging
-	logLevel := new(slog.LevelVar)
-	logLevel.Set(slog.LevelDebug) // Set log level to DEBUG
+	logLevel := new(slog.LevelVar) // Use LevelVar to allow potential dynamic changes
+	// loglevel is set after loading config
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)
 
@@ -29,14 +29,20 @@ func main() {
 
 	// Load configuration
 	if err := config.Load("./config.toml"); err != nil {
-		logger.Error("Failed to load configuration", "error", err)
+		// Use default logger here as config loading failed before level was set
+		slog.Error("Failed to load configuration", "error", err)
 		os.Exit(1)
 	}
-	appCfg := &config.AppConfig // Use pointer for easier passing
-	logger.Info("Configuration loaded", "port", appCfg.Port, "db_path", appCfg.BitcaskPath)
+	// Set log level from config AFTER loading it
+	logLevel.Set(config.AppConfig.LogLevelParsed)
+	logger.Info("Configuration loaded",
+		"port", config.AppConfig.Port,
+		"db_path", config.AppConfig.BitcaskPath,
+		"log_level", config.AppConfig.LogLevel,
+		"expiry_check", config.AppConfig.ExpiryCheckIntervalDuration)
 
 	// Initialize storage
-	store, err := storage.NewStorage(appCfg, logger)
+	store, err := storage.NewStorage(&config.AppConfig, logger)
 	if err != nil {
 		logger.Error("Failed to initialize storage", "error", err)
 		os.Exit(1)
@@ -59,8 +65,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create handlers
-	handlerDeps := handlers.New(store, appCfg, logger, tmpl)
+	// Create handlers (passing config directly)
+	handlerDeps := handlers.New(store, &config.AppConfig, logger, tmpl)
 
 	// Create middleware instance
 	mw := middleware.New(logger)
@@ -84,9 +90,9 @@ func main() {
 
 	// --- Authenticated routes ---
 	// Upload (requires upload key)
-	mux.Handle("POST /hole", mw.ClientIP(mw.AuthCheck(appCfg, false, true, false)(mw.Logging(http.HandlerFunc(handlerDeps.UploadHandler)))))
+	mux.Handle("POST /hole", mw.ClientIP(mw.AuthCheck(&config.AppConfig, false, true, false)(mw.Logging(http.HandlerFunc(handlerDeps.UploadHandler)))))
 	// Delete (requires admin key)
-	mux.Handle("DELETE /{filename}", mw.ClientIP(mw.AuthCheck(appCfg, false, false, true)(mw.Logging(http.HandlerFunc(handlerDeps.DeleteHandler)))))
+	mux.Handle("DELETE /{filename}", mw.ClientIP(mw.AuthCheck(&config.AppConfig, false, false, true)(mw.Logging(http.HandlerFunc(handlerDeps.DeleteHandler)))))
 
 	// Apply global middleware (Recovery should be first, then SecurityHeaders)
 	// Note: ClientIP was moved to wrap individual routes for logging accuracy
@@ -94,7 +100,7 @@ func main() {
 
 	// Configure server
 	server := &http.Server{
-		Addr:         fmt.Sprintf("%s:%s", appCfg.ListenAddr, appCfg.Port),
+		Addr:         fmt.Sprintf("%s:%s", config.AppConfig.ListenAddr, config.AppConfig.Port),
 		Handler:      finalHandler,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
@@ -103,8 +109,8 @@ func main() {
 
 	// Start expiry check goroutine
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()                            // Ensure context is cancelled on exit
-	go store.CheckExpiry(ctx, 10*time.Minute) // Check every 10 mins
+	defer cancel()                                                          // Ensure context is cancelled on exit
+	go store.CheckExpiry(ctx, config.AppConfig.ExpiryCheckIntervalDuration) // Use config value
 
 	// Start server in a goroutine
 	go func() {

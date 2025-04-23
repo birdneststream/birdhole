@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -12,34 +13,56 @@ import (
 // Config holds the application configuration.
 // Note: Field names must be capitalized to be exported and parsed by the TOML library.
 type Config struct {
-	Port            string `toml:"Port"`
-	ListenAddr      string `toml:"ListenAddr"`
-	DefaultExpiry   string `toml:"DefaultExpiry"` // Parsed into duration later
-	BitcaskPath     string `toml:"BitcaskPath"`
-	UploadKey       string `toml:"UploadKey"`
-	GalleryKey      string `toml:"GalleryKey"`
-	AdminKey        string `toml:"AdminKey"`
-	MaxUploadSizeMB int64  `toml:"MaxUploadSizeMB"`
-	BaseURL         string `toml:"BaseURL"`
+	Port                string `toml:"Port"`
+	ListenAddr          string `toml:"ListenAddr"`
+	DefaultExpiry       string `toml:"DefaultExpiry"` // Parsed into duration later
+	BitcaskPath         string `toml:"BitcaskPath"`
+	UploadKey           string `toml:"UploadKey"`
+	GalleryKey          string `toml:"GalleryKey"`
+	AdminKey            string `toml:"AdminKey"`
+	MaxUploadSizeMB     int64  `toml:"MaxUploadSizeMB"`
+	BaseURL             string `toml:"BaseURL"`
+	LogLevel            string `toml:"LogLevel"`            // New: Log level (debug, info, warn, error)
+	ExpiryCheckInterval string `toml:"ExpiryCheckInterval"` // New: How often to check for expired files
 
-	// Parsed durations
-	DefaultExpiryDuration time.Duration `toml:"-"` // Ignored by TOML parser
+	// Parsed durations & values
+	DefaultExpiryDuration       time.Duration `toml:"-"` // Ignored by TOML parser
+	ExpiryCheckIntervalDuration time.Duration `toml:"-"` // Ignored by TOML parser
+	LogLevelParsed              slog.Level    `toml:"-"` // Ignored by TOML parser
 }
 
 // AppConfig holds the global application configuration.
 var AppConfig Config
+
+// parseLogLevel converts a string level to slog.Level.
+func parseLogLevel(levelStr string) slog.Level {
+	switch strings.ToLower(levelStr) {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo // Default to Info if unknown
+	}
+}
 
 // Load reads the configuration from the specified path.
 // It applies defaults for missing optional values and validates required ones.
 func Load(configPath string) error {
 	// Set defaults
 	AppConfig = Config{
-		Port:            "8080",
-		ListenAddr:      "0.0.0.0",
-		DefaultExpiry:   "24h",
-		BitcaskPath:     "./birdhole.db",
-		MaxUploadSizeMB: 100,
-		BaseURL:         "/",
+		Port:                "8080",
+		ListenAddr:          "0.0.0.0",
+		DefaultExpiry:       "24h",
+		BitcaskPath:         "./birdhole.db",
+		MaxUploadSizeMB:     100,
+		BaseURL:             "/",
+		LogLevel:            "info", // Default log level
+		ExpiryCheckInterval: "10m",  // Default expiry check interval
 	}
 
 	// Check if config file exists
@@ -77,6 +100,21 @@ func Load(configPath string) error {
 		// Should not happen if default is set correctly, but handle anyway
 		AppConfig.DefaultExpiryDuration = 24 * time.Hour
 	}
+
+	// Parse ExpiryCheckInterval string into duration
+	if AppConfig.ExpiryCheckInterval != "" {
+		duration, err := time.ParseDuration(AppConfig.ExpiryCheckInterval)
+		if err != nil {
+			return fmt.Errorf("config error: invalid ExpiryCheckInterval duration '%s': %w", AppConfig.ExpiryCheckInterval, err)
+		}
+		AppConfig.ExpiryCheckIntervalDuration = duration
+	} else {
+		// Should not happen if default is set correctly, but handle anyway
+		AppConfig.ExpiryCheckIntervalDuration = 10 * time.Minute
+	}
+
+	// Parse LogLevel string into slog.Level
+	AppConfig.LogLevelParsed = parseLogLevel(AppConfig.LogLevel)
 
 	// Ensure MaxUploadSizeMB is reasonable
 	if AppConfig.MaxUploadSizeMB <= 0 {

@@ -176,11 +176,28 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		expiryTime = time.Now().Add(expiryDuration).Unix()
 	}
 
+	// --- Process Custom Metadata ---
+	meta := make(map[string]string)
+	metaPrefix := "meta_" // Define the prefix for metadata form fields
+	for key, values := range r.MultipartForm.Value {
+		if strings.HasPrefix(key, metaPrefix) && len(values) > 0 {
+			metaKey := strings.TrimPrefix(key, metaPrefix)
+			if metaKey != "" { // Ensure we have a key after trimming
+				// Use the first value provided for this key
+				// Consider simple sanitization if needed, e.g., template.HTMLEscapeString(values[0])
+				meta[metaKey] = values[0]
+				logger.Debug("Processed custom metadata field", "key", metaKey, "value", values[0])
+			}
+		}
+	}
+	// --- End Process Custom Metadata ---
+
 	fileInfo := file.Info{
 		Name:        uniqueFilename,
 		Description: description,
 		Hidden:      hidden,
 		Tags:        tags,
+		Meta:        meta, // Assign the parsed metadata map
 		MimeType:    mimeType,
 		Size:        fileHeader.Size, // Original size
 		Timestamp:   time.Now().Unix(),
@@ -319,7 +336,9 @@ func humanDuration(d time.Duration) string {
 func (h *Handlers) renderDetail(w http.ResponseWriter, r *http.Request, isPartial bool) {
 	filename := filepath.Base(r.URL.Path)
 	key := r.URL.Query().Get("key")
-	admin := isAdmin(r, h.Config)
+	// Determine admin status directly via query key for this route,
+	// as AuthCheck middleware is not applied globally to detail views.
+	admin := key != "" && h.Config.AdminKey != "" && key == h.Config.AdminKey
 
 	logger := h.Log.With("handler", "renderDetail", "filename", filename, "isAdmin", admin)
 
@@ -509,6 +528,15 @@ func (h *Handlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	filename := filepath.Base(r.URL.Path)
 	logger := h.Log.With("handler", "DeleteHandler", "filename", filename)
+
+	// --- Authorization Check ---
+	if !isAdmin(r, h.Config) {
+		logger.Warn("Unauthorized attempt to delete file")
+		// Note: Middleware should already block this, but belt-and-suspenders.
+		httpError(w, logger, "Forbidden", nil, http.StatusForbidden)
+		return
+	}
+	// --- End Authorization Check ---
 
 	// Validate filename format
 	if !validFilenameRegex.MatchString(filename) {

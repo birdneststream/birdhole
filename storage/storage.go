@@ -9,7 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/json"
-	"errors" // Added missing import
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,7 +21,14 @@ import (
 	"git.mills.io/prologic/bitcask"
 )
 
+const (
+	metaPrefix = "meta:"
+	filePrefix = "file:"
+)
+
 // StoredObject holds the metadata and the compressed content.
+// This struct is now primarily used as a return type for GetStoredObject,
+// it's not stored directly as a single JSON value anymore.
 type StoredObject struct {
 	Metadata  file.Info `json:"metadata"`
 	ContentGz []byte    `json:"content_gz"` // Gzipped content
@@ -74,9 +81,17 @@ func (s *Storage) Close() error {
 	return s.db.Close()
 }
 
+// Helper function to create prefixed keys
+func metaKey(filename string) []byte {
+	return []byte(metaPrefix + filename)
+}
+
+func fileKey(filename string) []byte {
+	return []byte(filePrefix + filename)
+}
+
 // GenerateUniqueFilename creates a short, random, unique base32 filename of the specified length.
 func (s *Storage) GenerateUniqueFilename(ctx context.Context, extension string, length int) (string, error) {
-	// Validate length
 	const minLen = 6
 	const maxLen = 16
 	if length < minLen || length > maxLen {
@@ -86,43 +101,42 @@ func (s *Storage) GenerateUniqueFilename(ctx context.Context, extension string, 
 
 	maxAttempts := 10 // Prevent infinite loops
 
-	b := make([]byte, length) // Use requested length
+	b := make([]byte, length)
 	enc := base32.StdEncoding.WithPadding(base32.NoPadding)
 
 	for i := 0; i < maxAttempts; i++ {
 		if _, err := rand.Read(b); err != nil {
 			return "", fmt.Errorf("failed to read random bytes: %w", err)
 		}
-		// Use lowercase and remove padding for shorter, cleaner URLs
-		// Trim to the desired length after encoding
-		filename := strings.ToLower(enc.EncodeToString(b))[:length]
+		baseFilename := strings.ToLower(enc.EncodeToString(b))[:length]
+		filename := baseFilename
 		if extension != "" {
-			// Ensure the extension starts with a dot if it's not empty
 			if !strings.HasPrefix(extension, ".") {
 				extension = "." + extension
 			}
-			filename = filename + extension // Keep original extension
+			filename = filename + extension
 		}
 
-		// Check if the key already exists
-		key := []byte(filename)
+		// Check if the *metadata* key already exists
+		mKey := metaKey(filename)
 		s.mu.RLock()
-		has := s.db.Has(key) // Corrected assignment
+		has := s.db.Has(mKey)
 		s.mu.RUnlock()
-		// Note: Original bitcask Has doesn't return an error. If a version does, error handling would be needed here.
+
 		if !has {
 			s.log.Debug("Generated unique filename", "filename", filename, "length", length)
 			return filename, nil
 		}
-		s.log.Debug("Filename collision, retrying", "filename", filename, "attempt", i+1)
+		s.log.Debug("Filename collision (checked meta key), retrying", "filename", filename, "attempt", i+1)
 	}
 
 	return "", fmt.Errorf("failed to generate unique filename of length %d after %d attempts", length, maxAttempts)
 }
 
-// PutFile stores the file content and metadata, compressing the content.
+// PutFile stores the file metadata and content under separate keys, compressing the content.
 func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, content io.Reader) error {
-	key := []byte(filename)
+	mKey := metaKey(filename)
+	fKey := fileKey(filename)
 
 	// Read content
 	contentBytes, err := io.ReadAll(content)
@@ -134,7 +148,7 @@ func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, 
 	var compressedBuf bytes.Buffer
 	gzWriter := gzip.NewWriter(&compressedBuf)
 	if _, err := gzWriter.Write(contentBytes); err != nil {
-		gzWriter.Close() // Ensure writer is closed even on error
+		gzWriter.Close()
 		return fmt.Errorf("failed to compress content: %w", err)
 	}
 	if err := gzWriter.Close(); err != nil {
@@ -142,56 +156,77 @@ func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, 
 	}
 	compressedBytes := compressedBuf.Bytes()
 
-	storedObj := StoredObject{
-		Metadata:  info,
-		ContentGz: compressedBytes,
-	}
-
-	// Marshal the StoredObject
-	data, err := json.Marshal(storedObj)
+	// Marshal the metadata
+	metaData, err := json.Marshal(info)
 	if err != nil {
-		return fmt.Errorf("failed to marshal StoredObject: %w", err)
+		return fmt.Errorf("failed to marshal file.Info: %w", err)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Store in Bitcask
-	err = s.db.Put(key, data)
+	// Store metadata
+	err = s.db.Put(mKey, metaData)
 	if err != nil {
-		s.log.Error("Failed to put file in storage", "filename", filename, "error", err)
-		return fmt.Errorf("failed to put file %q: %w", filename, err)
+		s.log.Error("Failed to put metadata in storage", "filename", filename, "key", string(mKey), "error", err)
+		return fmt.Errorf("failed to put metadata for %q: %w", filename, err)
 	}
+
+	// Store content
+	err = s.db.Put(fKey, compressedBytes)
+	if err != nil {
+		s.log.Error("Failed to put content in storage", "filename", filename, "key", string(fKey), "error", err)
+		// Attempt to delete the metadata we just wrote if content write fails
+		delErr := s.db.Delete(mKey)
+		if delErr != nil {
+			s.log.Error("Failed to rollback metadata write after content write failure", "filename", filename, "key", string(mKey), "delete_error", delErr)
+		}
+		return fmt.Errorf("failed to put content for %q: %w", filename, err)
+	}
+
 	s.log.Info("File stored successfully", "filename", filename, "original_size", len(contentBytes), "compressed_size", len(compressedBytes))
 	return nil
 }
 
-// GetStoredObject retrieves the StoredObject (metadata + compressed content).
+// GetStoredObject retrieves the metadata and compressed content from separate keys.
 func (s *Storage) GetStoredObject(ctx context.Context, filename string) (*StoredObject, error) {
-	key := []byte(filename)
+	mKey := metaKey(filename)
+	fKey := fileKey(filename)
+
+	var infoData, contentGz []byte
+	var info file.Info
+	var getErr error
 
 	s.mu.RLock()
-	data, err := s.db.Get(key)
+	infoData, getErr = s.db.Get(mKey)
+	if getErr == nil {
+		// Only get content if metadata was found
+		contentGz, getErr = s.db.Get(fKey)
+	}
 	s.mu.RUnlock()
 
-	if err != nil {
-		if errors.Is(err, bitcask.ErrKeyNotFound) {
-			s.log.Warn("File not found in storage", "filename", filename)
-			// Use a standard error type for not found
+	if getErr != nil {
+		if errors.Is(getErr, bitcask.ErrKeyNotFound) {
+			s.log.Warn("File meta or content not found in storage", "filename", filename, "key", string(mKey)+" or "+string(fKey))
 			return nil, fmt.Errorf("%w: file %q", os.ErrNotExist, filename)
 		}
-		s.log.Error("Failed to get file from storage", "filename", filename, "error", err)
-		return nil, fmt.Errorf("failed to get file %q: %w", filename, err)
+		s.log.Error("Failed to get file meta or content from storage", "filename", filename, "key", string(mKey)+" or "+string(fKey), "error", getErr)
+		return nil, fmt.Errorf("failed to get file %q: %w", filename, getErr)
 	}
 
-	var storedObj StoredObject
-	if err := json.Unmarshal(data, &storedObj); err != nil {
-		s.log.Error("Failed to unmarshal stored object", "filename", filename, "error", err)
-		return nil, fmt.Errorf("failed to unmarshal data for %q: %w", filename, err)
+	// Unmarshal metadata
+	if err := json.Unmarshal(infoData, &info); err != nil {
+		s.log.Error("Failed to unmarshal stored metadata", "filename", filename, "key", string(mKey), "error", err)
+		return nil, fmt.Errorf("failed to unmarshal metadata for %q: %w", filename, err)
+	}
+
+	storedObj := &StoredObject{
+		Metadata:  info,
+		ContentGz: contentGz,
 	}
 
 	s.log.Debug("Retrieved stored object", "filename", filename)
-	return &storedObj, nil
+	return storedObj, nil
 }
 
 // DecompressContent takes gzipped data and returns the decompressed bytes.
@@ -201,186 +236,190 @@ func DecompressContent(compressedData []byte) ([]byte, error) {
 	}
 	gzReader, err := gzip.NewReader(bytes.NewReader(compressedData))
 	if err != nil {
+		// Consider logging this error as well
 		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
 	}
 	defer gzReader.Close()
 
 	decompressedData, err := io.ReadAll(gzReader)
 	if err != nil {
+		// Consider logging this error as well
 		return nil, fmt.Errorf("failed to read decompressed data: %w", err)
 	}
 	return decompressedData, nil
 }
 
-// GetAllFilesInfo retrieves metadata for all files.
+// GetAllFilesInfo retrieves metadata for all files by scanning only metadata keys.
 func (s *Storage) GetAllFilesInfo(ctx context.Context) ([]file.Info, error) {
-	s.log.Debug("GetAllFilesInfo: Using Keys() method...")
-	// Sync before getting keys, just in case
-	if errSync := s.db.Sync(); errSync != nil {
-		s.log.Error("GetAllFilesInfo: Failed to sync database before Keys()", "error", errSync)
-		return nil, fmt.Errorf("failed to sync database before Keys(): %w", errSync)
-	}
-
+	s.log.Debug("GetAllFilesInfo: Scanning for keys with prefix", "prefix", metaPrefix)
 	var filesInfo []file.Info
-	processedKeys := 0
-	getKeysError := error(nil) // Variable to store errors from Get/Unmarshal inside the loop
 
-	s.mu.RLock() // Lock for the duration of key iteration and Gets
-	keysChan := s.db.Keys()
-	// Need to iterate the channel fully while holding the lock
-	for key := range keysChan {
+	s.mu.RLock() // Lock for the duration of the scan
+	err := s.db.Scan([]byte(metaPrefix), func(key []byte) error {
 		// Check context cancellation within the loop
 		select {
 		case <-ctx.Done():
-			s.log.Warn("GetAllFilesInfo: Context cancelled during key iteration")
-			getKeysError = ctx.Err()
-			break // Exit the loop
+			s.log.Warn("GetAllFilesInfo: Context cancelled during key scan")
+			return ctx.Err() // Stop the scan
 		default:
 		}
-		if getKeysError != nil {
-			break
-		}
 
-		processedKeys++
-		keyStr := string(key)
-		s.log.Debug("GetAllFilesInfo: Processing key from Keys() channel", "key", keyStr)
-
+		// Get the metadata value associated with this key
 		data, errGet := s.db.Get(key)
 		if errGet != nil {
-			s.log.Error("GetAllFilesInfo: Failed to get data for key from Keys()", "key", keyStr, "error", errGet)
+			// Log error but continue scan if possible
+			s.log.Error("GetAllFilesInfo: Failed to get data for meta key during scan", "key", string(key), "error", errGet)
 			if errors.Is(errGet, bitcask.ErrKeyNotFound) {
-				s.log.Debug("GetAllFilesInfo: Key not found during Get (using Keys), skipping", "key", keyStr)
-				continue // Key might have been deleted, continue
+				s.log.Debug("GetAllFilesInfo: Meta key not found during Get (likely deleted during scan), skipping", "key", string(key))
+				return nil // Continue scan
 			}
-			// Store the first critical error and stop processing
-			getKeysError = fmt.Errorf("failed getting key %s from Keys(): %w", keyStr, errGet)
-			break
+			return fmt.Errorf("failed getting data for key %s: %w", string(key), errGet) // Stop scan on critical error
 		}
-		s.log.Debug("GetAllFilesInfo: Successfully got data for key (using Keys)", "key", keyStr, "data_len", len(data))
 
-		var storedObj StoredObject
-		if errUnmarshal := json.Unmarshal(data, &storedObj); errUnmarshal != nil {
-			s.log.Error("GetAllFilesInfo: Failed to unmarshal data for key (using Keys)", "key", keyStr, "error", errUnmarshal)
-			// Maybe skip corrupted data? Let's skip for now.
-			continue
+		var info file.Info
+		if errUnmarshal := json.Unmarshal(data, &info); errUnmarshal != nil {
+			// Log error but continue scan if possible
+			s.log.Error("GetAllFilesInfo: Failed to unmarshal metadata during scan", "key", string(key), "error", errUnmarshal)
+			return nil // Skip corrupted data, continue scan
 		}
-		s.log.Debug("GetAllFilesInfo: Successfully unmarshalled data for key (using Keys)", "key", keyStr, "filename", storedObj.Metadata.Name)
+		filesInfo = append(filesInfo, info)
+		return nil // Continue scan
+	})
+	s.mu.RUnlock() // Unlock after scan finishes or errors
 
-		filesInfo = append(filesInfo, storedObj.Metadata)
-	}
-	s.mu.RUnlock() // Unlock after iterating through keys
-
-	s.log.Debug("GetAllFilesInfo: Finished processing keys from channel", "processed_keys", processedKeys)
-
-	// Check for errors encountered during Get/Unmarshal
-	if getKeysError != nil {
-		s.log.Error("Error during key processing in GetAllFilesInfo", "error", getKeysError)
-		return nil, getKeysError // Return the actual error encountered
+	if err != nil {
+		// This captures errors from the Get/Unmarshal inside the scan or context cancellation
+		s.log.Error("Error during metadata scan in GetAllFilesInfo", "error", err)
+		return nil, err
 	}
 
-	s.log.Info("Retrieved metadata for all files", "count", len(filesInfo))
+	s.log.Info("Retrieved metadata for all files via scan", "count", len(filesInfo))
 	return filesInfo, nil
 }
 
-// DeleteFile removes a file from storage.
+// DeleteFile removes both the metadata and content keys for a file.
 func (s *Storage) DeleteFile(ctx context.Context, filename string) error {
-	key := []byte(filename)
+	mKey := metaKey(filename)
+	fKey := fileKey(filename)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if key exists before deleting
-	has := s.db.Has(key) // Corrected assignment
+	// Check if metadata key exists before deleting
+	has := s.db.Has(mKey)
 	if !has {
-		s.log.Warn("Attempted to delete non-existent file", "filename", filename)
-		return fmt.Errorf("%w: file %q for deletion", os.ErrNotExist, filename) // Use standard not found error
+		s.log.Warn("Attempted to delete non-existent file (checked meta key)", "filename", filename)
+		return fmt.Errorf("%w: file %q for deletion", os.ErrNotExist, filename)
 	}
 
-	err := s.db.Delete(key)
-	if err != nil {
-		s.log.Error("Failed to delete file from storage", "filename", filename, "error", err)
-		return fmt.Errorf("failed to delete file %q: %w", filename, err)
+	// Delete metadata key
+	errMeta := s.db.Delete(mKey)
+	if errMeta != nil {
+		s.log.Error("Failed to delete metadata from storage", "filename", filename, "key", string(mKey), "error", errMeta)
+		// Proceed to delete file key anyway, but return the meta error
 	}
-	s.log.Info("File deleted successfully", "filename", filename)
+
+	// Delete file content key
+	errFile := s.db.Delete(fKey)
+	if errFile != nil {
+		// Log this error, especially if meta deletion succeeded
+		s.log.Error("Failed to delete file content from storage", "filename", filename, "key", string(fKey), "error", errFile)
+		// If meta deletion failed, return that error. If it succeeded, return this one.
+		if errMeta == nil {
+			return fmt.Errorf("failed to delete file content for %q: %w", filename, errFile)
+		}
+	}
+
+	if errMeta != nil {
+		return fmt.Errorf("failed to delete metadata for %q: %w", filename, errMeta)
+	}
+
+	s.log.Info("File deleted successfully (both meta and content)", "filename", filename)
 	return nil
 }
 
-// CleanupExpired iterates through all items and deletes expired ones.
+// CleanupExpired iterates through metadata keys and deletes expired files (both keys).
 func (s *Storage) CleanupExpired(ctx context.Context) (int, error) {
-	s.log.Info("Starting expired file cleanup")
+	s.log.Info("Starting expired file cleanup (scanning meta keys)")
 	var deletedCount int
-	var keysToDelete [][]byte
+	var keysToDelete [][]byte // Store keys to delete [metaKey1, fileKey1, metaKey2, fileKey2, ...]
 
-	s.mu.RLock() // Initial read lock for scanning keys
-	scanErr := s.db.Scan(nil, func(key []byte) error {
-		// No need to get data here, just collect keys
-		keysToDelete = append(keysToDelete, key)
-		return nil
+	s.mu.RLock() // Lock for the duration of the scan
+	scanErr := s.db.Scan([]byte(metaPrefix), func(key []byte) error {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			s.log.Warn("CleanupExpired: Context cancelled during key scan")
+			return ctx.Err()
+		default:
+		}
+
+		// Get metadata value
+		data, errGet := s.db.Get(key)
+		if errGet != nil {
+			s.log.Error("CleanupExpired: Failed to get data for meta key during scan", "key", string(key), "error", errGet)
+			return nil // Continue scan, skip this key
+		}
+
+		var info file.Info
+		if errUnmarshal := json.Unmarshal(data, &info); errUnmarshal != nil {
+			s.log.Error("CleanupExpired: Failed to unmarshal metadata during scan", "key", string(key), "error", errUnmarshal)
+			return nil // Continue scan, skip corrupted key
+		}
+
+		// Check expiry
+		if info.KeyExpiry != 0 && time.Now().Unix() > info.KeyExpiry {
+			filename := strings.TrimPrefix(string(key), metaPrefix)
+			s.log.Debug("CleanupExpired: Identified expired file", "filename", filename, "expiry", info.KeyExpiry)
+			keysToDelete = append(keysToDelete, key)               // Add meta key
+			keysToDelete = append(keysToDelete, fileKey(filename)) // Add corresponding file key
+		}
+		return nil // Continue scan
 	})
-	s.mu.RUnlock() // Release read lock
+	s.mu.RUnlock() // Unlock after scan
 
 	if scanErr != nil {
-		s.log.Error("Cleanup: Error during key scan", "error", scanErr)
+		s.log.Error("Error during metadata scan in CleanupExpired", "error", scanErr)
 		return 0, fmt.Errorf("cleanup failed during key scan: %w", scanErr)
 	}
 
 	if len(keysToDelete) == 0 {
-		s.log.Info("Cleanup: No files found to check for expiry")
+		s.log.Info("CleanupExpired: No expired files found to delete")
 		return 0, nil
 	}
 
-	s.log.Debug("Cleanup: Found potential candidates for expiry", "count", len(keysToDelete))
+	s.log.Info("CleanupExpired: Found expired keys to delete", "count", len(keysToDelete)/2) // Each file adds 2 keys
 
-	deletedKeysInBatch := 0
-	// Process deletions potentially in batches or one by one with individual locking
-	for _, key := range keysToDelete {
-		filename := string(key)
-		shouldDelete := false
+	// Process deletions
+	for i := 0; i < len(keysToDelete); i += 2 {
+		metaKeyToDelete := keysToDelete[i]
+		fileKeyToDelete := keysToDelete[i+1]
+		filename := strings.TrimPrefix(string(metaKeyToDelete), metaPrefix)
 
-		// Get data for expiry check - short RLock
-		s.mu.RLock()
-		data, err := s.db.Get(key)
-		s.mu.RUnlock()
+		// Perform deletion - short WLock for each pair
+		s.mu.Lock()
+		delMetaErr := s.db.Delete(metaKeyToDelete)
+		delFileErr := s.db.Delete(fileKeyToDelete)
+		s.mu.Unlock()
 
-		if err != nil {
-			if errors.Is(err, bitcask.ErrKeyNotFound) {
-				s.log.Debug("Cleanup: Key disappeared before expiry check", "key", filename)
-				continue // Already deleted or expired in another run
-			}
-			s.log.Error("Cleanup: Failed to get data for expiry check", "key", filename, "error", err)
-			continue // Skip this key, try others
+		if delMetaErr != nil {
+			s.log.Error("CleanupExpired: Failed to delete expired meta key", "key", string(metaKeyToDelete), "error", delMetaErr)
+			// Continue processing other keys
+		}
+		if delFileErr != nil {
+			s.log.Error("CleanupExpired: Failed to delete expired file key", "key", string(fileKeyToDelete), "error", delFileErr)
+			// Continue processing other keys
 		}
 
-		var storedObj StoredObject
-		if err := json.Unmarshal(data, &storedObj); err != nil {
-			s.log.Error("Cleanup: Failed to unmarshal data for expiry check", "key", filename, "error", err)
-			continue // Skip this key
-		}
-
-		if storedObj.Metadata.KeyExpiry != 0 && time.Now().Unix() > storedObj.Metadata.KeyExpiry {
-			shouldDelete = true
-			s.log.Debug("Cleanup: Identified expired file", "filename", storedObj.Metadata.Name, "expiry", storedObj.Metadata.KeyExpiry)
-		}
-
-		if shouldDelete {
-			// Perform deletion - short WLock
-			s.mu.Lock()
-			delErr := s.db.Delete(key)
-			s.mu.Unlock()
-
-			if delErr != nil {
-				s.log.Error("Cleanup: Failed to delete expired file", "key", filename, "error", delErr)
-				// Continue processing other keys
-			} else {
-				deletedCount++
-				deletedKeysInBatch++
-				s.log.Info("Cleanup: Deleted expired file", "filename", filename)
-			}
+		// Count as deleted only if meta key deletion succeeded (primary key)
+		if delMetaErr == nil {
+			deletedCount++
+			s.log.Info("CleanupExpired: Deleted expired file", "filename", filename)
 		}
 	}
 
 	s.log.Info("Finished expired file cleanup run", "deleted_count", deletedCount)
-	return deletedCount, nil // Return total count, error handling is logged
+	return deletedCount, nil // Return total count, errors are logged
 }
 
 // CheckExpiry runs the cleanup task periodically.
@@ -401,7 +440,6 @@ func (s *Storage) CheckExpiry(ctx context.Context, interval time.Duration) {
 	for {
 		select {
 		case <-ticker.C:
-			s.log.Debug("Expiry check ticker triggered")
 			if _, err := s.CleanupExpired(ctx); err != nil {
 				s.log.Error("Periodic expiry cleanup failed", "error", err)
 			}

@@ -166,7 +166,8 @@ main {
     color: #61afef;
 }
 
-.delete-button {
+/* NEW rule for the delete button specifically on gallery items */
+.gallery-item-delete-button {
     position: absolute;
     top: 5px;
     right: 5px;
@@ -176,11 +177,12 @@ main {
     border-radius: 3px;
     padding: 3px 6px;
     font-size: 0.8em;
+    line-height: 1; /* Ensure X fits */
     cursor: pointer;
-    z-index: 10;
+    z-index: 10; /* Ensure it's above the overlay */
 }
 
-.delete-button:hover {
+.gallery-item-delete-button:hover {
     background-color: rgb(194, 59, 59);
 }
 
@@ -192,6 +194,7 @@ main {
     background-color: #2c313a;
     border: 1px solid #181a1f;
     border-radius: 5px;
+    box-sizing: border-box; /* Ensure padding doesn't increase width */
 }
 
 .detail-preview img,
@@ -417,6 +420,7 @@ main {
 
 .action-button:last-child {
     margin-bottom: 0;
+    background-color: #529bcf;
 }
 
 .download-button {
@@ -426,15 +430,6 @@ main {
 
 .download-button:hover {
     background-color: #529bcf;
-}
-
-.delete-button {
-    background-color: #e06c75;
-    color: #282c34;
-}
-
-.delete-button:hover {
-    background-color: #be5046;
 }
 
 /* Custom Metadata Table */
@@ -483,3 +478,13 @@ main {
 /* Remove old .detail-metadata and .detail-content styles if they conflict */
 /*.detail-metadata { ... } */
 /*.detail-content { ... } */
+
+/* Ensure detail page delete button gets red background */
+.action-button.delete-button {
+    background-color: #e06c75; 
+    color: #282c34;
+}
+
+.delete-button:hover {
+    background-color: #be5046;
+}

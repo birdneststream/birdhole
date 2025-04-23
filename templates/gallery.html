@@ -98,8 +98,8 @@
                 </div>
             </a>
             {{ if $.IsAdmin }}
-                {{/* Delete button still uses key */}}
-                <button class="delete-button" 
+                {{/* Delete button using new specific class */}}
+                <button class="gallery-item-delete-button" 
                         hx-delete="/{{ .Name }}?key={{ $.CurrentKey }}" 
                         hx-confirm="Are you sure you want to delete {{ .Name }}?" 
                         hx-target="closest .gallery-item" 

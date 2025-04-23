@@ -37,20 +37,11 @@ func (h *Handlers) renderGallery(w http.ResponseWriter, r *http.Request, isParti
 	}
 	log = log.With("template", templateName, "partial", isPartial)
 
-	// --- Authentication/Authorization (Removed gallery access check) ---
-	// We still need isAdmin for potential admin-only features in the template.
+	// --- Authentication/Authorization ---
+	// For the public gallery route, admin status for display purposes
+	// is determined directly by the query key, as AuthCheck middleware isn't applied.
 	queryKey := r.URL.Query().Get("key")
-	// Use h.Config (capital C)
-	isAdmin := queryKey != "" && queryKey == h.Config.AdminKey
-	// hasGalleryAccess check removed as gallery is now public
-	/*
-		if !hasGalleryAccess {
-			log.Warn("Gallery access denied", "provided_key", queryKey)
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-	*/
-	// --- End Authentication ---
+	isAdmin := queryKey != "" && h.Config.AdminKey != "" && queryKey == h.Config.AdminKey
 
 	// --- Fetch All File Metadata ---
 	allFilesInfo, err := h.Storage.GetAllFilesInfo(ctx)
@@ -169,12 +160,14 @@ func (h *Handlers) renderGallery(w http.ResponseWriter, r *http.Request, isParti
 	}
 	sort.Strings(tagList) // Keep tag list sorted for consistent display
 
+	// REMOVED DEBUG LOG
+
 	data := map[string]interface{}{
 		"Files":        filteredFiles,
 		"UniqueTags":   tagList,
 		"ActiveTag":    activeTag,
 		"SortOrder":    sortOrder,
-		"CurrentKey":   queryKey, // Pass key for constructing links/URLs in template
+		"CurrentKey":   queryKey, // Pass original query key for constructing links/URLs in template
 		"IsAdmin":      isAdmin,
 		"RefreshParam": fmt.Sprintf("?ts=%d", time.Now().UnixNano()), // Basic cache buster for polling
 	}

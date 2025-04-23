@@ -94,14 +94,12 @@
                 {{ end }}
             </div>
 
-            {{ if .IsAdmin }}
             <div class="info-block">
                 <h3>Usage Statistics</h3>
                 <p><strong>Views:</strong> {{ .Views }}</p>
                 <p><strong>Uploaded:</strong> {{ formatDate .Info.Timestamp }}</p>
                 <p><strong>Expires In:</strong> {{ .ExpiresIn }}</p>
             </div>
-            {{ end }}
 
             {{/* Actions block - Download always visible, Delete is Admin only */}}
             <div class="info-block">
