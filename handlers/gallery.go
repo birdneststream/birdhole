@@ -24,8 +24,7 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-// Define specific error for invalid key access
-// var ErrInvalidAccessKey = errors.New("invalid gallery access key") // REMOVED - Assuming defined in handlers.go
+// var ErrInvalidAccessKey = errors.New("invalid access key") // REMOVED - Defined elsewhere
 
 // Handlers struct and NewHandlers func removed - should be defined in handlers.go
 
@@ -41,7 +40,7 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 	if h.Config.GalleryKey != "" { // Check if a gallery key is required
 		// Deny access ONLY if GalleryKey is required AND the provided key matches neither GalleryKey nor AdminKey
 		if queryKey != h.Config.GalleryKey && queryKey != h.Config.AdminKey {
-			log.Warn("Invalid gallery access key provided (neither GalleryKey nor AdminKey matched)", "provided_key", queryKey)
+			log.Warn("Invalid gallery access key provided", "provided_key", queryKey)
 			return nil, ErrInvalidAccessKey // Return specific error
 		}
 	}
@@ -62,21 +61,44 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 	log.Debug("Total files fetched from storage", "count", len(allFilesInfo))
 	// --- End Fetch ---
 
-	// --- Filtering and Sorting ---
-	activeTag := r.URL.Query().Get("tag")
-	sortOrder := r.URL.Query().Get("sort") // Expected: "new" or "old"
-	activeMime := r.URL.Query().Get("mime")
-	searchQuery := r.URL.Query().Get("q")
+	// --- Filtering and Sorting Parameters ---
+	queryValues := r.URL.Query()
+	activeTag := queryValues.Get("tag")
+	sortOrder := queryValues.Get("sort")
+	searchQuery := queryValues.Get("q")
+	activeShowMimes := queryValues["show_type"] // Get slice directly
 
-	log.Debug("Gallery view parameters", "isAdmin", isAdmin, "activeTag", activeTag, "sortOrder", sortOrder, "activeMime", activeMime, "searchQuery", searchQuery)
+	// Convert activeShowMimes to a map for faster lookup if specific types are requested.
+	showMimesMap := make(map[string]struct{}, len(activeShowMimes))
+	// If activeShowMimes is empty or nil, it means SHOW ALL types.
+	// If it's not empty, it means ONLY show the types listed.
+	showOnlySpecific := len(activeShowMimes) > 0
+	if showOnlySpecific {
+		for _, mime := range activeShowMimes {
+			if mime != "" {
+				showMimesMap[mime] = struct{}{}
+			}
+		}
+	}
 
+	log.Debug("Gallery view parameters",
+		"isAdmin", isAdmin,
+		"activeTag", activeTag,
+		"sortOrder", sortOrder,
+		"searchQuery", searchQuery,
+		"showMimes", activeShowMimes,
+		"showOnlySpecific", showOnlySpecific,
+	)
+
+	// --- Filtering Logic ---
 	var filteredFiles []templates.FileInfoWrapper
 	uniqueTags := make(map[string]struct{})
-	uniqueMimeTypes := make(map[string]struct{})
+	uniqueMimeTypes := make(map[string]struct{}) // Still collect all unique types for UI
 
 	for _, fileInfo := range allFilesInfo {
 		isVisible := !fileInfo.Hidden || isAdmin
 		if isVisible {
+			// Collect unique tags and mime types from all visible files for the UI controls
 			for _, tag := range fileInfo.Tags {
 				if tag != "" {
 					uniqueTags[strings.TrimSpace(tag)] = struct{}{}
@@ -87,10 +109,12 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 			}
 		}
 
+		// Apply visibility filter (admin override)
 		if !isVisible {
 			continue
 		}
 
+		// Apply tag filter
 		if activeTag != "" {
 			tagFound := false
 			for _, tag := range fileInfo.Tags {
@@ -104,10 +128,7 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 			}
 		}
 
-		if activeMime != "" && fileInfo.MimeType != activeMime {
-			continue
-		}
-
+		// Apply search query filter
 		if searchQuery != "" {
 			lcQuery := strings.ToLower(searchQuery)
 			nameMatch := strings.Contains(strings.ToLower(fileInfo.Name), lcQuery)
@@ -117,12 +138,28 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 			}
 		}
 
+		// Apply MIME type filtering (Show Only Specific)
+		fileMime := fileInfo.MimeType
+
+		// If we are showing only specific types (showOnlySpecific is true),
+		// check if this file's type is in the show list.
+		if showOnlySpecific {
+			_, showThisType := showMimesMap[fileMime]
+			if !showThisType {
+				continue // Skip if not in the explicit show list
+			}
+		}
+		// If showOnlySpecific is false (meaning activeShowMimes was empty),
+		// we show all types. No check needed.
+
+		// If the file passed all filters, prepare and add it
 		wrapper := templates.FileInfoWrapper{
 			Info:    fileInfo,
 			Key:     queryKey,
 			IsAdmin: isAdmin,
 		}
 
+		// Generate snippet for text files
 		if strings.HasPrefix(fileInfo.MimeType, "text/") {
 			storedObj, getErr := h.Storage.GetStoredObject(ctx, fileInfo.Name)
 			if getErr != nil {
@@ -146,12 +183,14 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 	}
 	log.Debug("Finished filtering files", "filtered_count", len(filteredFiles))
 
+	// --- Sorting ---
 	if sortOrder == "old" {
 		sort.SliceStable(filteredFiles, func(i, j int) bool {
 			return filteredFiles[i].Info.Timestamp < filteredFiles[j].Info.Timestamp
 		})
 		log.Debug("Sorted files by oldest")
 	} else {
+		// Default to newest if sortOrder is empty or invalid
 		sort.SliceStable(filteredFiles, func(i, j int) bool {
 			return filteredFiles[i].Info.Timestamp > filteredFiles[j].Info.Timestamp
 		})
@@ -179,8 +218,8 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 		"Files":           filteredFiles,
 		"UniqueTags":      tagList,
 		"ActiveTag":       activeTag,
-		"UniqueMimeTypes": mimeList,
-		"ActiveMime":      activeMime,
+		"UniqueMimeTypes": mimeList,        // Still needed for UI generation
+		"ActiveShowMimes": activeShowMimes, // Pass active show types to template
 		"SortOrder":       sortOrder,
 		"SearchQuery":     searchQuery,
 		"CurrentKey":      queryKey,
@@ -363,3 +402,5 @@ func (h *Handlers) GalleryItemsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Placeholder Handlers Removed ---
+
+// Helper function removed - defined elsewhere

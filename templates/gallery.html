@@ -29,84 +29,109 @@
          hx-indicator=".htmx-indicator"> 
         <nav>
             <div class="filter-controls"> 
-                <div class="tag-filters">
-                    <span>Tags:</span>
-                    <div id="tag-link-list"> {{/* Container for OOB swap */}}
-                    <a href="/gallery?key={{ .CurrentKey }}" 
-                       hx-get="/gallery/items" 
-                       hx-include="[name='key'], #mimeFilter, #sortOrder, #searchQuery" {{/* Use filter controls directly */}}
-                       hx-vals='{"tag": ""}' {{/* Override tag with JSON */}}
-                       hx-target="#gallery-items" 
-                       hx-push-url="true" 
-                       hx-swap="outerHTML:#gallery-items:transition:true" {{/* Swap outer div */}}
-                       hx-indicator=".htmx-indicator" 
-                       {{ if eq .ActiveTag "" }}class="active"{{ end }}>All</a>
-                    {{ range .UniqueTags }}
-                    <a 
-                        href="/gallery?key={{ $.CurrentKey }}&tag={{ . }}" 
-                        hx-get="/gallery/items" 
-                        hx-include="[name='key'], #mimeFilter, #sortOrder, #searchQuery" {{/* Use filter controls directly */}}
-                        hx-vals='{"tag": "{{ . }}"}' {{/* Override tag with JSON */}}
-                        hx-target="#gallery-items" 
-                        hx-push-url="true" 
-                        hx-swap="outerHTML:#gallery-items:transition:true" {{/* Swap outer div */}}
-                        hx-indicator=".htmx-indicator" 
-                        {{ if eq $.ActiveTag . }}class="active"{{ end }}>#{{ . }}</a>
-                    {{ end }}
-                    </div> {{/* End #tag-link-list */}}
-                </div>
-                <div class="select-filters">
-                    <label for="mimeFilter">Type:</label>
-                    <select id="mimeFilter" 
-                            name="mime" 
-                            hx-get="/gallery/items" 
-                            hx-include="[name='key'], [name='tag'], [name='sort'], [name='q']" 
-                            hx-target="#gallery-items" 
-                            hx-swap="outerHTML:#gallery-items:transition:true"
-                            hx-trigger="change"
-                            hx-push-url="true"
-                            hx-indicator=".htmx-indicator">
-                        <option value="" {{ if eq .ActiveMime "" }}selected{{ end }}>All Types</option>
-                        {{ range .UniqueMimeTypes }}
-                        <option value="{{ . }}" {{ if eq $.ActiveMime . }}selected{{ end }}>{{ . }}</option>
-                        {{ end }}
-                    </select>
+                {{/* NEW: Left Panel for Filters */}}
+                <div class="filter-panel-left">
+                    
+                    {{/* REVISED: Checkbox Filters for Types */}}
+                    <div class="checkbox-filters">
+                        <div class="show-types"> {{/* Keep class for styling consistency? Or rename? Let's keep for now */}}
+                            <span>Filter by Type:</span> {{/* Renamed Label */}}
+                            <div class="checkbox-group" 
+                                 hx-get="/gallery/items" 
+                                 hx-include="[name='key'], [name='tag'], [name='sort'], [name='q'], [name='show_type']" {{/* Removed hide_type */}} 
+                                 hx-target="#gallery-items" 
+                                 hx-swap="outerHTML:#gallery-items:transition:true"
+                                 hx-trigger="change from:input"
+                                 hx-push-url="true"
+                                 hx-indicator=".htmx-indicator">
+                                {{ range $index, $mime := .UniqueMimeTypes }}
+                                <label>
+                                    {{/* Logic: Check if ActiveShowMimes is empty (show all) OR if current mime is in ActiveShowMimes */}}
+                                    <input type="checkbox" name="show_type" value="{{ . }}" 
+                                           {{ if or (not $.ActiveShowMimes) (isInList . $.ActiveShowMimes) }}checked{{ end }}>
+                                    {{ . }}
+                                </label>
+                                {{ end }}
+                            </div>
+                        </div>
+                        {{/* REMOVED Hide Types Section */}}
+                    </div>
 
-                    <label for="sortOrder">Sort by:</label>
-                    <select id="sortOrder" 
-                            name="sort"
-                            hx-get="/gallery/items" 
-                            hx-include="[name='key'], [name='tag'], [name='mime'], [name='q']" 
-                            hx-target="#gallery-items" 
-                            hx-swap="outerHTML:#gallery-items:transition:true"
-                            hx-trigger="change"
-                            hx-push-url="true"
-                            hx-indicator=".htmx-indicator">
-                        <option value="new" {{ if ne .SortOrder "old" }}selected{{ end }}>Newest</option>
-                        <option value="old" {{ if eq .SortOrder "old" }}selected{{ end }}>Oldest</option>
-                    </select>
-                </div>
-                 <div class="search-filter"> 
-                    <input type="search" 
-                           id="searchQuery" 
-                           name="q" 
-                           placeholder="Search name/desc..." 
-                           value="{{ .SearchQuery }}" 
+                    {{/* NEW: Container for Sort and Search */}}
+                    <div class="sort-search-container">
+                        {{/* MOVED: Select and Search Filters */}}
+                        <div class="select-filters">
+                            <label for="sortOrder">Sort by:</label>
+                            <select id="sortOrder" 
+                                    name="sort"
+                                    hx-get="/gallery/items" 
+                                    hx-include="[name='key'], [name='tag'], [name='show_type'], [name='q']" 
+                                    hx-target="#gallery-items" 
+                                    hx-swap="outerHTML:#gallery-items:transition:true"
+                                    hx-trigger="change"
+                                    hx-push-url="true"
+                                    hx-indicator=".htmx-indicator">
+                                <option value="new" {{ if ne .SortOrder "old" }}selected{{ end }}>Newest</option>
+                                <option value="old" {{ if eq .SortOrder "old" }}selected{{ end }}>Oldest</option>
+                            </select>
+                        </div>
+                        <div class="search-filter"> 
+                            <label for="searchQuery">Search:</label> 
+                            <input type="search" 
+                                   id="searchQuery" 
+                                   name="q" 
+                                   placeholder="Search name/desc..." 
+                                   value="{{ .SearchQuery }}" 
+                                   hx-get="/gallery/items" 
+                                   hx-include="[name='key'], [name='tag'], [name='show_type'], [name='sort']" 
+                                   hx-target="#gallery-items" 
+                                   hx-swap="outerHTML:#gallery-items:transition:true"
+                                   hx-trigger="keyup changed delay:500ms, search" 
+                                   hx-push-url="true"
+                                   hx-indicator=".htmx-indicator">
+                        </div>
+                    </div> {{/* End Sort and Search Container */}}
+
+                </div> {{/* End Left Panel */}}
+
+                {{/* NEW: Right Panel for Tags */}}
+                <div class="filter-panel-right">
+                    <div class="tag-filters">
+                        <span>Tags:</span>
+                        <div id="tag-link-list"> {{/* Container for OOB swap */}}
+                        <a href="/gallery?key={{ .CurrentKey }}" 
                            hx-get="/gallery/items" 
-                           hx-include="[name='key'], [name='tag'], [name='mime'], [name='sort']" 
+                           hx-include="[name='key'], [name='show_type'], #sortOrder, #searchQuery" {{/* Removed hide_type */}} 
+                           hx-vals='{"tag": ""}' 
                            hx-target="#gallery-items" 
-                           hx-swap="outerHTML:#gallery-items:transition:true"
-                           hx-trigger="keyup changed delay:500ms, search" 
-                           hx-push-url="true"
-                           hx-indicator=".htmx-indicator">
-                </div>
+                           hx-push-url="true" 
+                           hx-swap="outerHTML:#gallery-items:transition:true" 
+                           hx-indicator=".htmx-indicator" 
+                           {{ if eq .ActiveTag "" }}class="active"{{ end }}>All</a>
+                        {{ range .UniqueTags }}
+                        <a 
+                            href="/gallery?key={{ $.CurrentKey }}&tag={{ . }}" 
+                            hx-get="/gallery/items" 
+                            hx-include="[name='key'], [name='show_type'], #sortOrder, #searchQuery" {{/* Removed hide_type */}} 
+                            hx-vals='{"tag": "{{ . }}"}' 
+                            hx-target="#gallery-items" 
+                            hx-push-url="true" 
+                            hx-swap="outerHTML:#gallery-items:transition:true" 
+                            hx-indicator=".htmx-indicator" 
+                            {{ if eq $.ActiveTag . }}class="active"{{ end }}>#{{ . }}</a>
+                        {{ end }}
+                        </div> {{/* End #tag-link-list */}}
+                    </div>
+                </div> {{/* End Right Panel */}}
             </div>
 
-            <!-- Hidden inputs to store current filter state -->
-            <input type="hidden" name="tag" value="{{ .ActiveTag }}">
-            <input type="hidden" name="mime" value="{{ .ActiveMime }}">
-            <input type="hidden" name="sort" value="{{ .SortOrder | default "new" }}">
-            <input type="hidden" name="q" value="{{ .SearchQuery }}">
+            {{/* Hidden inputs to store current filter state */}}
+            {{/* We now rely on hx-include to get values directly from inputs/selects */}}
+            {{/* Might need hidden inputs if state needs to be preserved across full page loads differently */}}
+            {{/* <input type="hidden" name="tag" value="{{ .ActiveTag }}"> */}}
+            {{/* <input type="hidden" name="mime" value="{{ .ActiveMime }}"> */}} {{/* Replaced by show/hide */}}
+            {{/* <input type="hidden" name="sort" value="{{ .SortOrder | default "new" }}"> */}}
+            {{/* <input type="hidden" name="q" value="{{ .SearchQuery }}"> */}}
             <input type="hidden" name="key" value="{{ .CurrentKey }}">
 
         </nav>
@@ -177,7 +202,7 @@
 <div id="tag-link-list" hx-swap-oob="true"> {{/* Target for OOB swap */}}
     <a href="/gallery?key={{ .CurrentKey }}" 
        hx-get="/gallery/items" 
-       hx-include="[name='key'], #mimeFilter, #sortOrder, #searchQuery" 
+       hx-include="[name='key'], [name='show_type'], #sortOrder, #searchQuery" {{/* Removed hide_type */}} 
        hx-vals='{"tag": ""}' 
        hx-target="#gallery-items" 
        hx-push-url="true" 
@@ -188,7 +213,7 @@
     <a 
         href="/gallery?key={{ $.CurrentKey }}&tag={{ . }}" 
         hx-get="/gallery/items" 
-        hx-include="[name='key'], #mimeFilter, #sortOrder, #searchQuery" 
+        hx-include="[name='key'], [name='show_type'], #sortOrder, #searchQuery" {{/* Removed hide_type */}} 
         hx-vals='{"tag": "{{ . }}"}' 
         hx-target="#gallery-items" 
         hx-push-url="true" 

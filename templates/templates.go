@@ -11,6 +11,9 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	// Import the slices package (Go 1.21+)
+	"slices"
 )
 
 //go:embed gallery.html detail.html welcome.html
@@ -25,6 +28,7 @@ var (
 		// "truncate":    truncateString, // Removed - Helper exists in handlers pkg, not used directly in tmpl?
 		"addQuery": addQueryParam,
 		"default":  defaultFunc,
+		"isInList": isInList,
 	}
 )
 
@@ -116,6 +120,19 @@ func defaultFunc(defaultValue interface{}, value interface{}) interface{} {
 		// Add other types (float, uint) if needed
 	}
 	return value
+}
+
+// isInList checks if a string item exists in a slice of strings.
+func isInList(item string, list []string) bool {
+	// Use slices.Contains for Go 1.21+
+	return slices.Contains(list, item)
+	// // Manual check for older Go versions:
+	// for _, v := range list {
+	// 	if v == item {
+	// 		return true
+	// 	}
+	// }
+	// return false
 }
 
 // FileInfoWrapper wraps FileInfo to potentially add extra fields for templates.
