@@ -24,6 +24,7 @@ type Config struct {
 	BaseURL             string `toml:"BaseURL"`
 	LogLevel            string `toml:"LogLevel"`            // New: Log level (debug, info, warn, error)
 	ExpiryCheckInterval string `toml:"ExpiryCheckInterval"` // New: How often to check for expired files
+	ViewCounterSalt     string `toml:"ViewCounterSalt"`     // New: Secret salt for hashing IPs
 
 	// Parsed durations & values
 	DefaultExpiryDuration       time.Duration `toml:"-"` // Ignored by TOML parser
@@ -61,8 +62,9 @@ func Load(configPath string) error {
 		BitcaskPath:         "./birdhole.db",
 		MaxUploadSizeMB:     100,
 		BaseURL:             "/",
-		LogLevel:            "info", // Default log level
-		ExpiryCheckInterval: "10m",  // Default expiry check interval
+		LogLevel:            "info",                              // Default log level
+		ExpiryCheckInterval: "10m",                               // Default expiry check interval
+		ViewCounterSalt:     "default-insecure-change-this-salt", // Default salt (INSECURE)
 	}
 
 	// Check if config file exists
@@ -82,6 +84,13 @@ func Load(configPath string) error {
 	}
 	if AppConfig.AdminKey == "" {
 		return fmt.Errorf("config error: AdminKey must be set")
+	}
+
+	// Validate ViewCounterSalt
+	if AppConfig.ViewCounterSalt == "" || AppConfig.ViewCounterSalt == "default-insecure-change-this-salt" {
+		// Warn if salt is empty or default, but don't fail load
+		// Consider making this a fatal error in production environments.
+		slog.Warn("Security warning: ViewCounterSalt is empty or using the default insecure value. Please set a strong secret salt in your configuration.")
 	}
 
 	// Ensure BaseURL has a trailing slash if set and not just "/"

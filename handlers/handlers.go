@@ -18,6 +18,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -36,6 +37,31 @@ var ErrInvalidAccessKey = errors.New("invalid gallery access key")
 
 // Regex to validate expected filename format: 6-16 lowercase base32 chars + optional extension.
 var validFilenameRegex = regexp.MustCompile(`^[a-z0-9]{6,16}(\.[a-zA-Z0-9]+)?$`)
+
+// getClientIP extracts the client IP address from the request, checking common headers.
+func getClientIP(r *http.Request) string {
+	// Check Cloudflare header first
+	if cfIP := r.Header.Get("CF-Connecting-IP"); cfIP != "" {
+		return cfIP
+	}
+
+	// Check X-Forwarded-For
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// XFF can contain a comma-separated list, the first is the original client
+		parts := strings.Split(xff, ",")
+		if len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+
+	// Fallback to RemoteAddr (might be proxy IP)
+	// Split host and port, return only host
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	// Return RemoteAddr as is if splitting fails (e.g., no port)
+	return r.RemoteAddr
+}
 
 // Handlers holds dependencies for HTTP handlers.
 type Handlers struct {
@@ -318,14 +344,6 @@ func (h *Handlers) FileServingHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- Increment View Count ---
-	// Do this *after* confirming the file exists and is accessible
-	if err := h.Storage.IncrementViewCount(r.Context(), filename); err != nil {
-		// Log the error but don't fail the request just because view count failed
-		logger.Error("Failed to increment view count", "error", err)
-	}
-	// --- End Increment View Count ---
-
 	// Set headers
 	w.Header().Set("Content-Type", storedObj.Metadata.MimeType)
 	w.Header().Set("Content-Encoding", "gzip")
@@ -417,13 +435,13 @@ func (h *Handlers) renderDetail(w http.ResponseWriter, r *http.Request, isPartia
 		return
 	}
 
-	// --- Increment View Count ---
-	// Do this *after* confirming the file exists and is accessible
-	if err := h.Storage.IncrementViewCount(r.Context(), filename); err != nil {
+	// --- Increment Unique View Count ---
+	clientIP := getClientIP(r) // Get client IP using helper
+	if err := h.Storage.IncrementViewCountUnique(r.Context(), filename, clientIP); err != nil {
 		// Log the error but don't fail the request just because view count failed
-		logger.Error("Failed to increment view count", "error", err)
+		logger.Error("Failed to increment unique view count", "error", err, "clientIP", clientIP)
 	}
-	// --- End Increment View Count ---
+	// --- End Increment Unique View Count ---
 
 	var renderedContent template.HTML
 	contentType := storedObj.Metadata.MimeType

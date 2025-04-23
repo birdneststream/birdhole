@@ -7,7 +7,9 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,8 +24,9 @@ import (
 )
 
 const (
-	metaPrefix = "meta:"
-	filePrefix = "file:"
+	metaPrefix     = "meta:"
+	filePrefix     = "file:"
+	viewHashPrefix = "viewhash:" // New prefix for view hashes
 )
 
 // StoredObject holds the metadata and the compressed content.
@@ -88,6 +91,11 @@ func metaKey(filename string) []byte {
 
 func fileKey(filename string) []byte {
 	return []byte(filePrefix + filename)
+}
+
+// Helper function to create view hash keys
+func viewHashKey(filename string) []byte {
+	return []byte(viewHashPrefix + filename)
 }
 
 // GenerateUniqueFilename creates a short, random, unique base32 filename of the specified length.
@@ -246,6 +254,110 @@ func DecompressContent(compressedData []byte) ([]byte, error) {
 	return decompressedData, nil
 }
 
+// IncrementViewCountUnique checks if a salted+hashed IP has viewed the file today
+// and increments the main view counter only if it's a unique view.
+func (s *Storage) IncrementViewCountUnique(ctx context.Context, filename string, clientIP string) error {
+	mKey := metaKey(filename)
+	vhKey := viewHashKey(filename)
+	log := s.log.With("function", "IncrementViewCountUnique", "filename", filename, "clientIP", clientIP)
+
+	// --- Generate Salted Hash ---
+	if s.cfg.ViewCounterSalt == "" {
+		log.Error("ViewCounterSalt is not configured. Cannot track unique views.")
+		// Don't increment anything if salt is missing
+		return errors.New("view counter salt is not configured")
+	}
+	salt := s.cfg.ViewCounterSalt
+	hasher := sha256.New()
+	hasher.Write([]byte(salt + clientIP)) // Salt first
+	hashedIPBytes := hasher.Sum(nil)
+	// Use Base64 encoding for storage
+	currentViewHash := base64.StdEncoding.EncodeToString(hashedIPBytes)
+
+	// --- Read-Modify-Write Cycle (Locked) ---
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 1. Get existing view hashes
+	var existingHashes string
+	hashListData, err := s.db.Get(vhKey)
+	if err != nil {
+		if errors.Is(err, bitcask.ErrKeyNotFound) {
+			// Key not found means this is the first view today
+			log.Debug("No existing view hash list found. First view.")
+			existingHashes = "" // Start with empty list
+		} else {
+			// Other error reading hash list
+			log.Error("Failed to get view hash list", "error", err)
+			return fmt.Errorf("failed to get view hash list for %q: %w", filename, err)
+		}
+	} else {
+		existingHashes = string(hashListData)
+	}
+
+	// 2. Check if current hash already exists
+	// Simple check for existence (can be slow for very long lists, but ok for 24h expiry)
+	hashLine := currentViewHash + "\n"
+	if strings.Contains(existingHashes, hashLine) {
+		log.Debug("View hash already exists. Not incrementing.")
+		return nil // Already counted today
+	}
+
+	// 3. If unique, increment main counter in metadata
+	log.Debug("Unique view detected. Incrementing counter.")
+
+	// 3a. Get current metadata
+	infoData, err := s.db.Get(mKey)
+	if err != nil {
+		if errors.Is(err, bitcask.ErrKeyNotFound) {
+			log.Error("Metadata not found when trying to increment unique view count (should not happen if hash list exists or is new)", "filename", filename)
+			return fmt.Errorf("%w: file %q metadata missing during unique view increment", os.ErrNotExist, filename)
+		}
+		log.Error("Failed to get metadata for unique view increment", "error", err)
+		return fmt.Errorf("failed to get metadata for %q: %w", filename, err)
+	}
+
+	// 3b. Unmarshal metadata
+	var info file.Info
+	if err := json.Unmarshal(infoData, &info); err != nil {
+		log.Error("Failed to unmarshal metadata for unique view increment", "error", err)
+		return fmt.Errorf("failed to unmarshal metadata for %q: %w", filename, err)
+	}
+
+	// 3c. Increment view count
+	info.Views++
+	log.Debug("Incremented main view count", "new_count", info.Views)
+
+	// 3d. Marshal updated metadata
+	updatedInfoData, err := json.Marshal(info)
+	if err != nil {
+		log.Error("Failed to marshal updated metadata for unique view increment", "error", err)
+		return fmt.Errorf("failed to marshal updated metadata for %q: %w", filename, err)
+	}
+
+	// 4. Append new hash to list
+	updatedHashes := existingHashes + hashLine
+
+	// 5. Put updated metadata
+	if err := s.db.Put(mKey, updatedInfoData); err != nil {
+		log.Error("Failed to put updated metadata for unique view increment", "error", err)
+		// Don't attempt to write hash list if meta fails
+		return fmt.Errorf("failed to put updated metadata for %q: %w", filename, err)
+	}
+
+	// 6. Put updated hash list
+	if err := s.db.Put(vhKey, []byte(updatedHashes)); err != nil {
+		log.Error("Failed to put updated view hash list", "error", err)
+		// This is problematic - meta counter is updated, but hash list isn't.
+		// Maybe attempt rollback? For now, just return error.
+		return fmt.Errorf("failed to put updated view hash list for %q: %w", filename, err)
+	}
+
+	// --- End Read-Modify-Write ---
+
+	return nil
+}
+
 // GetAllFilesInfo retrieves metadata for all files by scanning only metadata keys.
 func (s *Storage) GetAllFilesInfo(ctx context.Context) ([]file.Info, error) {
 	s.log.Debug("GetAllFilesInfo: Scanning for keys with prefix", "prefix", metaPrefix)
@@ -298,6 +410,7 @@ func (s *Storage) GetAllFilesInfo(ctx context.Context) ([]file.Info, error) {
 func (s *Storage) DeleteFile(ctx context.Context, filename string) error {
 	mKey := metaKey(filename)
 	fKey := fileKey(filename)
+	vhKey := viewHashKey(filename) // Get view hash key
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -313,7 +426,7 @@ func (s *Storage) DeleteFile(ctx context.Context, filename string) error {
 	errMeta := s.db.Delete(mKey)
 	if errMeta != nil {
 		s.log.Error("Failed to delete metadata from storage", "filename", filename, "key", string(mKey), "error", errMeta)
-		// Proceed to delete file key anyway, but return the meta error
+		// Proceed to delete other keys anyway, but return the meta error
 	}
 
 	// Delete file content key
@@ -327,19 +440,31 @@ func (s *Storage) DeleteFile(ctx context.Context, filename string) error {
 		}
 	}
 
+	// Delete view hash key (ignore error if it doesn't exist)
+	errHash := s.db.Delete(vhKey)
+	if errHash != nil && !errors.Is(errHash, bitcask.ErrKeyNotFound) {
+		s.log.Error("Failed to delete view hash key from storage", "filename", filename, "key", string(vhKey), "error", errHash)
+		// If meta/file deletion succeeded, return this error.
+		if errMeta == nil && errFile == nil {
+			return fmt.Errorf("failed to delete view hash key for %q: %w", filename, errHash)
+		}
+	}
+
 	if errMeta != nil {
 		return fmt.Errorf("failed to delete metadata for %q: %w", filename, errMeta)
 	}
 
-	s.log.Info("File deleted successfully (both meta and content)", "filename", filename)
+	s.log.Info("File deleted successfully (meta, content, and view hash)", "filename", filename)
 	return nil
 }
 
-// CleanupExpired iterates through metadata keys and deletes expired files (both keys).
+// CleanupExpired iterates through metadata keys and deletes expired files (all keys).
 func (s *Storage) CleanupExpired(ctx context.Context) (int, error) {
 	s.log.Info("Starting expired file cleanup (scanning meta keys)")
 	var deletedCount int
-	var keysToDelete [][]byte // Store keys to delete [metaKey1, fileKey1, metaKey2, fileKey2, ...]
+	// Store tuples: [metaKey, fileKey, viewHashKey, filename]
+	var keysToDelete [][][]byte
+	var filenamesToDelete []string
 
 	s.mu.RLock() // Lock for the duration of the scan
 	scanErr := s.db.Scan([]byte(metaPrefix), func(key []byte) error {
@@ -368,8 +493,8 @@ func (s *Storage) CleanupExpired(ctx context.Context) (int, error) {
 		if info.KeyExpiry != 0 && time.Now().Unix() > info.KeyExpiry {
 			filename := strings.TrimPrefix(string(key), metaPrefix)
 			s.log.Debug("CleanupExpired: Identified expired file", "filename", filename, "expiry", info.KeyExpiry)
-			keysToDelete = append(keysToDelete, key)               // Add meta key
-			keysToDelete = append(keysToDelete, fileKey(filename)) // Add corresponding file key
+			keysToDelete = append(keysToDelete, [][]byte{key, fileKey(filename), viewHashKey(filename)})
+			filenamesToDelete = append(filenamesToDelete, filename)
 		}
 		return nil // Continue scan
 	})
@@ -385,18 +510,20 @@ func (s *Storage) CleanupExpired(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	s.log.Info("CleanupExpired: Found expired keys to delete", "count", len(keysToDelete)/2) // Each file adds 2 keys
+	s.log.Info("CleanupExpired: Found expired keys to delete", "count", len(keysToDelete))
 
 	// Process deletions
-	for i := 0; i < len(keysToDelete); i += 2 {
-		metaKeyToDelete := keysToDelete[i]
-		fileKeyToDelete := keysToDelete[i+1]
+	for i := 0; i < len(keysToDelete); i++ {
+		metaKeyToDelete := keysToDelete[i][0]
+		fileKeyToDelete := keysToDelete[i][1]
+		viewHashKeyToDelete := keysToDelete[i][2]
 		filename := strings.TrimPrefix(string(metaKeyToDelete), metaPrefix)
 
-		// Perform deletion - short WLock for each pair
+		// Perform deletion - short WLock for each tuple
 		s.mu.Lock()
 		delMetaErr := s.db.Delete(metaKeyToDelete)
 		delFileErr := s.db.Delete(fileKeyToDelete)
+		delViewHashErr := s.db.Delete(viewHashKeyToDelete)
 		s.mu.Unlock()
 
 		if delMetaErr != nil {
@@ -405,6 +532,10 @@ func (s *Storage) CleanupExpired(ctx context.Context) (int, error) {
 		}
 		if delFileErr != nil {
 			s.log.Error("CleanupExpired: Failed to delete expired file key", "key", string(fileKeyToDelete), "error", delFileErr)
+			// Continue processing other keys
+		}
+		if delViewHashErr != nil {
+			s.log.Error("CleanupExpired: Failed to delete expired view hash key", "key", string(viewHashKeyToDelete), "error", delViewHashErr)
 			// Continue processing other keys
 		}
 
