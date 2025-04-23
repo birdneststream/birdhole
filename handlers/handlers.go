@@ -7,6 +7,7 @@ import (
 	"birdhole/middleware"
 	"birdhole/storage"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -255,18 +256,49 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// --- Calculate Image Dimensions --- // ADDED
 	var width, height int
+	var compressedThumbBytes []byte // ADDED: Variable to hold compressed thumb
 	if strings.HasPrefix(mimeType, "image/") {
+		// First, try to get dimensions
 		imgConfig, _, err := image.DecodeConfig(bytes.NewReader(contentBytes))
 		if err != nil {
-			// Log error but don't fail the upload
 			logger.Warn("Could not decode image config to get dimensions", "filename", originalFilename, "error", err)
 		} else {
 			width = imgConfig.Width
 			height = imgConfig.Height
 			logger.Debug("Calculated image dimensions", "width", width, "height", height)
+
+			// --- Generate and Compress Thumbnail --- ADDED
+			// Only proceed if dimensions were successfully decoded
+			img, format, decodeErr := image.Decode(bytes.NewReader(contentBytes)) // Decode fully
+			if decodeErr != nil {
+				// Log error decoding full image for thumbnail, but don't fail upload
+				logger.Warn("Could not decode full image for thumbnail generation", "filename", originalFilename, "error", decodeErr)
+			} else {
+				logger.Debug("Decoded full image for thumbnail generation", "format", format)
+				// Generate thumbnail (same size as before)
+				thumb := imaging.Thumbnail(img, 400, 300, imaging.Lanczos)
+
+				// Encode thumbnail as JPEG into a buffer
+				var thumbBuf bytes.Buffer
+				encodeErr := imaging.Encode(&thumbBuf, thumb, imaging.JPEG, imaging.JPEGQuality(85))
+				if encodeErr != nil {
+					logger.Warn("Failed to encode thumbnail to JPEG", "filename", originalFilename, "error", encodeErr)
+				} else {
+					// Compress the encoded thumbnail
+					var compressErr error
+					compressedThumbBytes, compressErr = storage.CompressContent(thumbBuf.Bytes())
+					if compressErr != nil {
+						logger.Warn("Failed to compress thumbnail content", "filename", originalFilename, "error", compressErr)
+						compressedThumbBytes = nil // Ensure it's nil if compression fails
+					} else {
+						logger.Debug("Successfully generated and compressed thumbnail", "compressed_size", len(compressedThumbBytes))
+					}
+				}
+			}
+			// --- End Generate and Compress Thumbnail ---
 		}
 	}
-	// --- End Calculate Image Dimensions ---
+	// --- End Calculate Image Dimensions & Thumbnail ---
 
 	fileInfo := file.Info{
 		Name:        uniqueFilename,
@@ -289,8 +321,8 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the file (passing contentBytes)
-	err = h.Storage.PutFile(r.Context(), uniqueFilename, fileInfo, contentBytes)
+	// Store the file (passing contentBytes and optional compressedThumbBytes)
+	err = h.Storage.PutFile(r.Context(), uniqueFilename, fileInfo, contentBytes, compressedThumbBytes) // MODIFIED: Pass thumb bytes
 	if err != nil {
 		httpError(w, logger, "Failed to store file", err, http.StatusInternalServerError)
 		return
@@ -568,55 +600,118 @@ func (h *Handlers) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	storedObj, err := h.Storage.GetStoredObject(r.Context(), filename)
+	// --- NEW: Retrieve pre-generated thumbnail ---
+	compressedThumbData, err := h.Storage.GetThumbnail(r.Context(), filename)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			http.NotFound(w, r)
+			// --- START: Fallback for missing thumbnail ---
+			logger.Warn("Pre-generated thumbnail not found, attempting real-time generation and storage")
+
+			// 1. Get original file data
+			storedObj, getErr := h.Storage.GetStoredObject(r.Context(), filename)
+			if getErr != nil {
+				if errors.Is(getErr, os.ErrNotExist) {
+					logger.Error("Original file not found while attempting thumbnail fallback", "error", getErr)
+					http.NotFound(w, r)
+				} else {
+					httpError(w, logger, "Failed to retrieve original file for thumbnail fallback", getErr, http.StatusInternalServerError)
+				}
+				return
+			}
+
+			// 2. Check admin access for hidden files (needed if GetStoredObject doesn't check)
+			// Re-check isAdmin status based on context key, as ThumbnailHandler might be public
+			if storedObj.Metadata.Hidden && !isAdmin(r, h.Config) { // Use isAdmin helper
+				logger.Warn("Attempt to access hidden file thumbnail fallback without admin key")
+				http.NotFound(w, r)
+				return
+			}
+
+			// 3. Check if it's an image
+			if !strings.HasPrefix(storedObj.Metadata.MimeType, "image/") {
+				// Should not happen if gallery links correctly, but handle anyway
+				logger.Error("Attempted thumbnail fallback for non-image file")
+				http.NotFound(w, r) // Treat as not found if it's not an image
+				return
+			}
+
+			// 4. Decompress original
+			decompressedOriginal, decompErr := storage.DecompressContent(storedObj.ContentGz)
+			if decompErr != nil {
+				httpError(w, logger, "Failed to decompress original image for thumbnail fallback", decompErr, http.StatusInternalServerError)
+				return
+			}
+
+			// 5. Decode original
+			img, format, decodeErr := image.Decode(bytes.NewReader(decompressedOriginal))
+			if decodeErr != nil {
+				httpError(w, logger, "Failed to decode original image for thumbnail fallback", decodeErr, http.StatusInternalServerError)
+				return
+			}
+			logger.Debug("Decoded original image for fallback thumbnail", "format", format)
+
+			// 6. Generate thumbnail
+			thumb := imaging.Thumbnail(img, 400, 300, imaging.Lanczos)
+
+			// 7. Encode thumbnail to buffer
+			var thumbBuf bytes.Buffer
+			encodeErr := imaging.Encode(&thumbBuf, thumb, imaging.JPEG, imaging.JPEGQuality(85))
+			if encodeErr != nil {
+				httpError(w, logger, "Failed to encode generated thumbnail during fallback", encodeErr, http.StatusInternalServerError)
+				return
+			}
+			generatedThumbBytes := thumbBuf.Bytes() // Get the raw JPEG bytes
+
+			// 8. Compress thumbnail for storage
+			compressedThumbToStore, compressErr := storage.CompressContent(generatedThumbBytes)
+			if compressErr != nil {
+				// Log error but continue to serve the generated thumb
+				logger.Error("Failed to compress generated thumbnail for storage", "error", compressErr)
+			} else {
+				// 9. Store the compressed thumbnail (fire and forget, log errors)
+				go func() {
+					if storeErr := h.Storage.PutThumbnail(context.Background(), filename, compressedThumbToStore); storeErr != nil {
+						logger.Error("Failed to store generated thumbnail in background", "filename", filename, "error", storeErr)
+					}
+				}()
+			}
+
+			// 10. Serve the *generated* (uncompressed) thumbnail
+			w.Header().Set("Content-Type", "image/jpeg")
+			w.Header().Set("Content-Length", strconv.Itoa(len(generatedThumbBytes)))
+			w.Header().Set("Cache-Control", "public, max-age=86400") // Still cache the generated one
+			w.WriteHeader(http.StatusOK)
+			_, writeErr := w.Write(generatedThumbBytes)
+			if writeErr != nil {
+				logger.Error("Failed to write generated thumbnail content to response", "error", writeErr)
+			}
+			return // Finished handling the fallback
+			// --- END: Fallback for missing thumbnail ---
 		} else {
-			httpError(w, logger, "Failed to retrieve file for thumbnail", err, http.StatusInternalServerError)
+			// Other error retrieving from storage (not ErrNotExist)
+			httpError(w, logger, "Failed to retrieve thumbnail data", err, http.StatusInternalServerError)
 		}
 		return
 	}
 
-	if storedObj.Metadata.Hidden && !isAdmin(r, h.Config) {
-		logger.Warn("Attempt to access hidden file thumbnail without admin key")
-		http.NotFound(w, r)
-		return
-	}
+	// --- Thumbnail found in storage, proceed as before ---
 
-	// Check if it's an image type we can handle
-	if !strings.HasPrefix(storedObj.Metadata.MimeType, "image/") {
-		httpError(w, logger, "File is not an image", nil, http.StatusBadRequest)
-		return
-	}
-
-	// Decompress
-	decompressed, err := storage.DecompressContent(storedObj.ContentGz)
+	// Decompress thumbnail data
+	decompressedThumb, err := storage.DecompressContent(compressedThumbData)
 	if err != nil {
-		httpError(w, logger, "Failed to decompress image for thumbnail", err, http.StatusInternalServerError)
+		httpError(w, logger, "Failed to decompress stored thumbnail data", err, http.StatusInternalServerError)
 		return
 	}
 
-	// Decode image
-	img, format, err := image.Decode(bytes.NewReader(decompressed))
-	if err != nil {
-		httpError(w, logger, "Failed to decode image", err, http.StatusInternalServerError)
-		return
-	}
-	logger.Debug("Decoded image for thumbnail", "format", format)
-
-	// Generate thumbnail (e.g., 400x300 max, preserving aspect ratio)
-	thumb := imaging.Thumbnail(img, 400, 300, imaging.Lanczos)
-
-	// Encode as JPEG
-	w.Header().Set("Content-Type", "image/jpeg")
-	// Add cache headers
+	// Serve the decompressed thumbnail
+	w.Header().Set("Content-Type", "image/jpeg") // Assuming JPEG was used during generation
+	w.Header().Set("Content-Length", strconv.Itoa(len(decompressedThumb)))
 	w.Header().Set("Cache-Control", "public, max-age=86400") // Cache for 1 day
-
-	err = imaging.Encode(w, thumb, imaging.JPEG, imaging.JPEGQuality(85))
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write(decompressedThumb)
 	if err != nil {
-		httpError(w, logger, "Failed to encode thumbnail", err, http.StatusInternalServerError)
-		return
+		// Log error writing response, but headers might already be sent
+		logger.Error("Failed to write thumbnail content to response", "error", err)
 	}
 }
 

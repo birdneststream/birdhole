@@ -140,7 +140,7 @@
                 {{ if eq (printf "%.5s" .MimeType) "image" }}
                     <img src="/thumbnail/{{ .Name }}" alt="{{ .Description }}">
                 {{ else if eq (printf "%.5s" .MimeType) "video" }}
-                    <video muted loop autoplay src="/{{ .Name }}" title="{{ .Name }}"></video>
+                    <video muted loop autoplay playsinline src="/{{ .Name }}" title="{{ .Name }}"></video>
                 {{ else if eq (printf "%.5s" .MimeType) "audio" }}
                      <span class="gallery-item-icon">&#127925;</span>
                 {{ else if eq (printf "%.4s" .MimeType) "text" }}
