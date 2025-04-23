@@ -99,6 +99,27 @@ func isAdmin(r *http.Request, cfg *config.Config) bool {
 
 // --- Handlers ---
 
+// WelcomeHandler serves the initial welcome/key entry page or redirects to the gallery.
+func (h *Handlers) WelcomeHandler(w http.ResponseWriter, r *http.Request) {
+	logger := h.Log.With("handler", "WelcomeHandler")
+
+	// Check if a gallery read key is configured
+	if h.Config.GalleryKey == "" {
+		// No key required, redirect directly to the gallery
+		logger.Info("No gallery key set, redirecting to /gallery")
+		http.Redirect(w, r, "/gallery", http.StatusTemporaryRedirect)
+		return
+	}
+
+	// Key is required, render the welcome page
+	logger.Info("Gallery key required, rendering welcome page")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	err := h.Tmpl.ExecuteTemplate(w, "welcome.html", nil) // No specific data needed for this template yet
+	if err != nil {
+		httpError(w, logger, "Failed to execute welcome template", err, http.StatusInternalServerError)
+	}
+}
+
 // UploadHandler handles file uploads.
 func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

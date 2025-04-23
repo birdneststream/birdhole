@@ -23,23 +23,28 @@ const ClientIPContextKey = contextKey("clientIP")
 
 // Middleware holds dependencies for middleware handlers.
 type Middleware struct {
-	log            *slog.Logger
-	rateLimiters   map[string]*rate.Limiter
-	rateLimitMutex sync.Mutex
-	rateLimitR     rate.Limit
-	rateLimitB     int
+	log                 *slog.Logger
+	cfg                 *config.Config
+	rateLimiters        map[string]*rate.Limiter
+	rateLimitMutex      sync.Mutex
+	rateLimitR          rate.Limit
+	rateLimitB          int
+	galleryAttempts     map[string][]time.Time
+	galleryAttemptMutex sync.Mutex
 }
 
 // New creates a new Middleware instance.
-func New(logger *slog.Logger) *Middleware {
+func New(logger *slog.Logger, cfg *config.Config) *Middleware {
 	r := rate.Limit(2)
 	b := 4
 
 	return &Middleware{
-		log:          logger.With("component", "middleware"),
-		rateLimiters: make(map[string]*rate.Limiter),
-		rateLimitR:   r,
-		rateLimitB:   b,
+		log:             logger.With("component", "middleware"),
+		cfg:             cfg,
+		rateLimiters:    make(map[string]*rate.Limiter),
+		rateLimitR:      r,
+		rateLimitB:      b,
+		galleryAttempts: make(map[string][]time.Time),
 	}
 }
 
@@ -94,6 +99,62 @@ func (m *Middleware) RateLimit(next http.Handler) http.Handler {
 			return
 		}
 
+		next.ServeHTTP(w, r)
+	})
+}
+
+// GalleryRateLimit middleware - ADDED
+func (m *Middleware) GalleryRateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only apply to GET /gallery requests that include a 'key' parameter
+		if !(r.Method == "GET" && r.URL.Path == "/gallery" && r.URL.Query().Has("key")) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Use configured limits (ensure config is loaded and duration parsed)
+		limit := m.cfg.GalleryRateLimitCount
+		window := m.cfg.GalleryRateLimitWindowDuration
+		if limit <= 0 || window <= 0 {
+			m.log.Warn("Gallery rate limiting disabled due to invalid config", "limit", limit, "window", window)
+			next.ServeHTTP(w, r) // Limiting disabled, proceed
+			return
+		}
+
+		ip := getClientIP(r)
+
+		m.galleryAttemptMutex.Lock()
+		defer m.galleryAttemptMutex.Unlock()
+
+		// Clean up old timestamps and count recent attempts
+		now := time.Now()
+		attemptsInWindow := 0
+		var recentAttempts []time.Time
+		if attempts, exists := m.galleryAttempts[ip]; exists {
+			cutoff := now.Add(-window)
+			for _, t := range attempts {
+				if t.After(cutoff) {
+					recentAttempts = append(recentAttempts, t)
+					attemptsInWindow++
+				}
+			}
+		}
+
+		// Check if limit is exceeded
+		if attemptsInWindow >= limit {
+			m.log.Warn("Gallery rate limit exceeded", "client_ip", ip, "path", r.URL.Path, "limit", limit, "window", window)
+			retryAfter := time.Until(recentAttempts[0].Add(window)).Seconds()
+			if retryAfter < 1 {
+				retryAfter = 1
+			}
+			w.Header().Set("Retry-After", fmt.Sprintf("%.0f", retryAfter))
+			http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+			m.galleryAttempts[ip] = recentAttempts // Keep the recent attempts causing the block
+			return
+		}
+
+		// Record current attempt and allow request
+		m.galleryAttempts[ip] = append(recentAttempts, now)
 		next.ServeHTTP(w, r)
 	})
 }

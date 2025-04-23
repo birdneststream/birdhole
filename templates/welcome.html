@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome - Birdhole</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#21252b">
+    <link rel="icon" href="/static/icons/favicon.ico" sizes="any">
+    <link rel="icon" href="/static/icons/favicon-16x16.png" sizes="16x16" type="image/png">
+    <link rel="icon" href="/static/icons/favicon-32x32.png" sizes="32x32" type="image/png">
+    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+</head>
+<body>
+    <div class="welcome-container">
+        <h1>Welcome to Birdhole</h1>
+        <p>This gallery is password protected. Please enter the password to proceed:</p>
+        <form method="GET" action="/gallery" class="welcome-form">
+            <label for="gallery-key">Gallery Key:</label>
+            <input type="password" id="gallery-key" name="key" required>
+            <button type="submit">Enter Gallery</button>
+        </form>
+    </div>
+</body>
+</html> 

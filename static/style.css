@@ -676,3 +676,61 @@ main {
         font-size: 0.9em;
     }
 }
+
+/* === Welcome Page Styles === */
+
+.welcome-container {
+    max-width: 500px;
+    margin: 50px auto; /* Add top margin */
+    padding: 30px;
+    background-color: #2c313a;
+    border: 1px solid #181a1f;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+}
+
+.welcome-container h1 {
+    color: #61afef;
+    margin-bottom: 20px;
+}
+
+.welcome-container p {
+    color: #abb2bf;
+    margin-bottom: 25px;
+    font-size: 1.1em;
+}
+
+.welcome-form label {
+    display: block;
+    margin-bottom: 8px;
+    color: #98c379;
+    font-weight: bold;
+    font-size: 0.95em;
+}
+
+.welcome-form input[type="password"] {
+    width: calc(100% - 22px); /* Adjust width for padding/border */
+    padding: 10px;
+    margin-bottom: 20px;
+    background-color: #3e4451;
+    color: #abb2bf;
+    border: 1px solid #181a1f;
+    border-radius: 4px;
+    font-size: 1em;
+}
+
+.welcome-form button {
+    padding: 12px 25px;
+    background-color: #61afef;
+    color: #282c34;
+    border: none;
+    border-radius: 4px;
+    font-size: 1em;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.welcome-form button:hover {
+    background-color: #529bcf;
+}

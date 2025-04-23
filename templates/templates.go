@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-//go:embed gallery.html detail.html
+//go:embed gallery.html detail.html welcome.html
 var templateFS embed.FS
 
 var (

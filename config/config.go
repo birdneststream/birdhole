@@ -13,23 +13,26 @@ import (
 // Config holds the application configuration.
 // Note: Field names must be capitalized to be exported and parsed by the TOML library.
 type Config struct {
-	Port                string `toml:"Port"`
-	ListenAddr          string `toml:"ListenAddr"`
-	DefaultExpiry       string `toml:"DefaultExpiry"` // Parsed into duration later
-	BitcaskPath         string `toml:"BitcaskPath"`
-	UploadKey           string `toml:"UploadKey"`
-	GalleryKey          string `toml:"GalleryKey"`
-	AdminKey            string `toml:"AdminKey"`
-	MaxUploadSizeMB     int64  `toml:"MaxUploadSizeMB"`
-	BaseURL             string `toml:"BaseURL"`
-	LogLevel            string `toml:"LogLevel"`            // New: Log level (debug, info, warn, error)
-	ExpiryCheckInterval string `toml:"ExpiryCheckInterval"` // New: How often to check for expired files
-	ViewCounterSalt     string `toml:"ViewCounterSalt"`     // New: Secret salt for hashing IPs
+	Port                   string `toml:"Port"`
+	ListenAddr             string `toml:"ListenAddr"`
+	DefaultExpiry          string `toml:"DefaultExpiry"` // Parsed into duration later
+	BitcaskPath            string `toml:"BitcaskPath"`
+	UploadKey              string `toml:"UploadKey"`
+	GalleryKey             string `toml:"GalleryKey"`
+	AdminKey               string `toml:"AdminKey"`
+	MaxUploadSizeMB        int64  `toml:"MaxUploadSizeMB"`
+	BaseURL                string `toml:"BaseURL"`
+	LogLevel               string `toml:"LogLevel"`                         // New: Log level (debug, info, warn, error)
+	ExpiryCheckInterval    string `toml:"ExpiryCheckInterval"`              // New: How often to check for expired files
+	ViewCounterSalt        string `toml:"ViewCounterSalt"`                  // New: Secret salt for hashing IPs
+	GalleryRateLimitCount  int    `toml:"GalleryRateLimitCount,omitempty"`  // ADDED: Max gallery key attempts per window
+	GalleryRateLimitWindow string `toml:"GalleryRateLimitWindow,omitempty"` // ADDED: Gallery rate limit window (e.g., "1m")
 
 	// Parsed durations & values
-	DefaultExpiryDuration       time.Duration `toml:"-"` // Ignored by TOML parser
-	ExpiryCheckIntervalDuration time.Duration `toml:"-"` // Ignored by TOML parser
-	LogLevelParsed              slog.Level    `toml:"-"` // Ignored by TOML parser
+	DefaultExpiryDuration          time.Duration `toml:"-"` // Ignored by TOML parser
+	ExpiryCheckIntervalDuration    time.Duration `toml:"-"` // Ignored by TOML parser
+	LogLevelParsed                 slog.Level    `toml:"-"` // Ignored by TOML parser
+	GalleryRateLimitWindowDuration time.Duration `toml:"-"` // ADDED: Parsed gallery rate limit window
 }
 
 // AppConfig holds the global application configuration.
@@ -56,15 +59,17 @@ func parseLogLevel(levelStr string) slog.Level {
 func Load(configPath string) error {
 	// Set defaults
 	AppConfig = Config{
-		Port:                "8080",
-		ListenAddr:          "0.0.0.0",
-		DefaultExpiry:       "24h",
-		BitcaskPath:         "./birdhole.db",
-		MaxUploadSizeMB:     100,
-		BaseURL:             "/",
-		LogLevel:            "info",                              // Default log level
-		ExpiryCheckInterval: "10m",                               // Default expiry check interval
-		ViewCounterSalt:     "default-insecure-change-this-salt", // Default salt (INSECURE)
+		Port:                   "8080",
+		ListenAddr:             "0.0.0.0",
+		DefaultExpiry:          "24h",
+		BitcaskPath:            "./birdhole.db",
+		MaxUploadSizeMB:        100,
+		BaseURL:                "/",
+		LogLevel:               "info",                              // Default log level
+		ExpiryCheckInterval:    "10m",                               // Default expiry check interval
+		ViewCounterSalt:        "default-insecure-change-this-salt", // Default salt (INSECURE)
+		GalleryRateLimitCount:  10,                                  // ADDED: Default 10 attempts
+		GalleryRateLimitWindow: "1m",                                // ADDED: Default 1 minute window
 	}
 
 	// Check if config file exists
@@ -124,6 +129,21 @@ func Load(configPath string) error {
 
 	// Parse LogLevel string into slog.Level
 	AppConfig.LogLevelParsed = parseLogLevel(AppConfig.LogLevel)
+
+	// Parse GalleryRateLimitWindow string into duration
+	if AppConfig.GalleryRateLimitWindow != "" {
+		duration, err := time.ParseDuration(AppConfig.GalleryRateLimitWindow)
+		if err != nil {
+			// Don't fail load, just log warning and maybe disable limiting?
+			// For now, just log and use default duration.
+			slog.Warn("Invalid GalleryRateLimitWindow duration, using default", "input", AppConfig.GalleryRateLimitWindow, "error", err)
+			AppConfig.GalleryRateLimitWindowDuration = 1 * time.Minute // Fallback to default
+		} else {
+			AppConfig.GalleryRateLimitWindowDuration = duration
+		}
+	} else {
+		AppConfig.GalleryRateLimitWindowDuration = 1 * time.Minute // Default if empty
+	}
 
 	// Ensure MaxUploadSizeMB is reasonable
 	if AppConfig.MaxUploadSizeMB <= 0 {

@@ -69,10 +69,13 @@ func main() {
 	handlerDeps := handlers.New(store, &config.AppConfig, logger, tmpl)
 
 	// Create middleware instance
-	mw := middleware.New(logger)
+	mw := middleware.New(logger, &config.AppConfig)
 
 	// Setup routing
 	mux := http.NewServeMux()
+
+	// --- Root Path ---
+	mux.Handle("GET /", mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.WelcomeHandler))))
 
 	// --- Public routes (mostly) ---
 	mux.Handle("GET /{filename}", mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.FileServingHandler))))
@@ -80,11 +83,11 @@ func main() {
 	mux.Handle("GET /thumbnail/{filename}", mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.ThumbnailHandler))))
 	// Static files (no auth needed)
 	staticFS := http.Dir("./static")
-	mux.Handle("/static/", mw.ClientIP(mw.Logging(handlerDeps.StaticHandler(staticFS)))) // Note: ClientIP might be overkill for static
+	mux.Handle("GET /static/", mw.ClientIP(mw.Logging(handlerDeps.StaticHandler(staticFS)))) // CHANGED: Explicitly use GET method
 
 	// --- Gallery routes - Now public ---
 	// galleryAuth middleware removed
-	mux.Handle("GET /gallery", mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.GalleryHandler))))
+	mux.Handle("GET /gallery", mw.GalleryRateLimit(mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.GalleryHandler)))))
 	mux.Handle("GET /gallery/items", mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.GalleryItemsHandler))))
 	mux.Handle("GET /detail/{filename}", mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.DetailViewHandler))))
 
