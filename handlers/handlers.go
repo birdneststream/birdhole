@@ -318,6 +318,14 @@ func (h *Handlers) FileServingHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// --- Increment View Count ---
+	// Do this *after* confirming the file exists and is accessible
+	if err := h.Storage.IncrementViewCount(r.Context(), filename); err != nil {
+		// Log the error but don't fail the request just because view count failed
+		logger.Error("Failed to increment view count", "error", err)
+	}
+	// --- End Increment View Count ---
+
 	// Set headers
 	w.Header().Set("Content-Type", storedObj.Metadata.MimeType)
 	w.Header().Set("Content-Encoding", "gzip")
@@ -408,6 +416,14 @@ func (h *Handlers) renderDetail(w http.ResponseWriter, r *http.Request, isPartia
 		http.NotFound(w, r)
 		return
 	}
+
+	// --- Increment View Count ---
+	// Do this *after* confirming the file exists and is accessible
+	if err := h.Storage.IncrementViewCount(r.Context(), filename); err != nil {
+		// Log the error but don't fail the request just because view count failed
+		logger.Error("Failed to increment view count", "error", err)
+	}
+	// --- End Increment View Count ---
 
 	var renderedContent template.HTML
 	contentType := storedObj.Metadata.MimeType
