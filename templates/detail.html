@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Birdhole - {{ .Info.Name }}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    {{/* Use modern Photo Sphere Viewer v5 CDN links */}}
+    {{ if .Info.Panorama }}
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@photo-sphere-viewer/core/index.min.css" />
+    {{ end }}
+    <script src="/static/js/htmx.min.js" defer></script>
+    {{/* Use modern Three.js and PSV Core v5 CDN links, with defer */}}
+    {{ if .Info.Panorama }}
+    <script src="https://cdn.jsdelivr.net/npm/three/build/three.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/@photo-sphere-viewer/core/index.min.js" defer></script>
+    {{ end }}
+</head>
+<body>
+    <div class="detail-header">
+        <a href="/gallery?key={{ .Key }}" class="back-link">&larr; Back to Gallery</a>
+        <h2>{{ .Info.Name }}</h2>
+        {{ if .Info.Description }}<p class="detail-description">{{ .Info.Description }}</p>{{ end }}
+    </div>
+
+    <div class="detail-container">
+
+        <div class="detail-preview">
+            {{ if .Info.Panorama }}
+                <div id="panorama-viewer" style="width: 100%; height: 500px;"></div>
+                {{/* Inline initialization script, adapted from reference */}}
+                <script>
+                    document.addEventListener('DOMContentLoaded', function() {
+                        // Check if library loaded (optional but good practice)
+                        if (typeof PhotoSphereViewer === 'undefined') {
+                            console.error("Photo Sphere Viewer library not loaded.");
+                            document.querySelector('#panorama-viewer').textContent = 'Error: Photo Sphere Viewer library not loaded.';
+                            return;
+                        }
+                        try {
+                            const viewer = new PhotoSphereViewer.Viewer({
+                                container: document.querySelector('#panorama-viewer'),
+                                panorama: '/{{ .Info.Name }}?key={{ .Key }}', // Use template data
+                                defaultPitch: 0.6, // Options from reference/previous attempts
+                                defaultZoomLvl: 0,
+                                fisheye: true,
+                                navbar: [
+                                    'zoom',
+                                    'move',
+                                    'fullscreen'
+                                ],
+                                caption: '{{ .Info.Name }}' // Use template data
+                            });
+                            // Use addEventListener for v5
+                            viewer.addEventListener('error', (e) => {
+                                console.error('Photo Sphere Viewer error:', e);
+                                document.querySelector('#panorama-viewer').textContent = 'Error loading panorama: ' + e.message;
+                            });
+                        } catch (e) {
+                            console.error("Error initializing Photo Sphere Viewer:", e);
+                            document.querySelector('#panorama-viewer').textContent = 'Error initializing panorama viewer: ' + e.message;
+                        }
+                    });
+                </script>
+            {{ else if eq (printf "%.5s" .Info.MimeType) "image" }}
+                <img src="/{{ .Info.Name }}?key={{ .Key }}" alt="{{ .Info.Description }}">
+            {{ else if eq (printf "%.5s" .Info.MimeType) "video" }}
+                <video controls src="/{{ .Info.Name }}?key={{ .Key }}"></video>
+            {{ else if eq (printf "%.5s" .Info.MimeType) "audio" }}
+                <audio controls src="/{{ .Info.Name }}?key={{ .Key }}"></audio>
+            {{ else if .RenderedContent }}
+                <!-- Content is rendered below -->
+            {{ else }}
+                <p>Cannot display preview for this file type ({{ .Info.MimeType }}). <a href="/{{ .Info.Name }}?key={{ .Key }}">Download</a></p>
+            {{ end }}
+        </div>
+
+        {{ if .Info.Tags }}
+        <div class="detail-tags info-block">
+            <h3>Tags</h3>
+            {{ range .Info.Tags }}
+            <span class="tag-badge">{{ . }}</span>
+            {{ end }}
+        </div>
+        {{ end }}
+
+        <div class="detail-info-grid">
+            <div class="info-block">
+                <h3>File Information</h3>
+                <p><strong>Size:</strong> {{ formatBytes .Info.Size }}</p>
+                <p><strong>Type:</strong> {{ .Info.MimeType }}</p>
+                {{ if and (.Info.Width) (.Info.Height) }}
+                <p><strong>Dimensions:</strong> {{ .Info.Width }} &times; {{ .Info.Height }}</p>
+                {{ end }}
+            </div>
+
+            {{ if .IsAdmin }}
+            <div class="info-block">
+                <h3>Usage Statistics</h3>
+                <p><strong>Views:</strong> {{ .Views }}</p>
+                <p><strong>Uploaded:</strong> {{ formatDate .Info.Timestamp }}</p>
+                <p><strong>Expires In:</strong> {{ .ExpiresIn }}</p>
+            </div>
+            {{ end }}
+
+            {{/* Actions block - Download always visible, Delete is Admin only */}}
+            <div class="info-block">
+                <h3>Actions</h3>
+                {{/* Download button accessible to all viewers */}}
+                <a href="/{{ .Info.Name }}?key={{ .Key }}" 
+                   class="action-button download-button" 
+                   download="{{ .Info.Name }}"> 
+                   Download
+                </a>
+                {{/* Delete button only for Admin */}}
+                {{ if .IsAdmin }}
+                <button class="action-button delete-button" 
+                        hx-delete="/{{ .Info.Name }}?key={{ .Key }}"
+                        hx-confirm="Are you sure you want to delete {{ .Info.Name }}?"
+                        hx-target="body" 
+                        hx-swap="outerHTML" 
+                        hx-push-url="/gallery?key={{ .Key }}">Delete File</button>
+                {{ end }}
+            </div>
+        </div>
+
+        {{ if and .IsAdmin .Metadata }}
+        <div class="info-block metadata-block">
+            <h3>Custom Metadata</h3>
+            <table>
+                {{ range $key, $value := .Metadata }}
+                <tr>
+                    <th>{{ $key }}</th>
+                    <td>{{ $value }}</td>
+                </tr>
+                {{ end }}
+            </table>
+        </div>
+        {{ end }}
+
+        {{ if .RenderedContent }}
+        <div class="detail-content info-block">
+            <h3>Content Preview</h3>
+            {{ .RenderedContent }}
+        </div>
+        {{ end }}
+
+    </div>
+</body>
+</html> 

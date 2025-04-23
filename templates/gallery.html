@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Birdhole Gallery</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/js/htmx.min.js" defer></script> 
+</head>
+<body>
+    <header>
+        <h1>Birdhole Gallery</h1>
+        <!-- Add search/filter controls here if needed later -->
+    </header>
+
+    <nav>
+        <ul>
+            <li><a href="/gallery?key={{ .CurrentKey }}" {{ if eq .ActiveTag "" }}class="active"{{ end }}>All</a></li>
+            {{ range .UniqueTags }}
+            <li><a 
+                href="/gallery?key={{ $.CurrentKey }}&tag={{ . }}" 
+                hx-get="/gallery/items?key={{ $.CurrentKey }}&tag={{ . }}" 
+                hx-target="#gallery-items" 
+                hx-push-url="true" 
+                hx-indicator=".htmx-indicator" 
+                {{ if eq $.ActiveTag . }}class="active"{{ end }}>#{{ . }}</a></li>
+            {{ end }}
+        </ul>
+        <div>
+            <label for="sortOrder">Sort by:</label>
+            <select id="sortOrder" 
+                    hx-get="{{ addQuery "/gallery/items" "key" .CurrentKey }}" 
+                    hx-include="[name='tag']" 
+                    hx-target="#gallery-items" 
+                    hx-trigger="change"
+                    hx-push-url="true"
+                    hx-indicator=".htmx-indicator"
+                    name="sort">
+                <option value="new" {{ if ne .SortOrder "old" }}selected{{ end }}>Newest</option>
+                <option value="old" {{ if eq .SortOrder "old" }}selected{{ end }}>Oldest</option>
+            </select>
+            <!-- Hidden input to include tag in sorting request if active -->
+            {{ if .ActiveTag }}
+            <input type="hidden" name="tag" value="{{ .ActiveTag }}">
+            {{ end }}
+        </div>
+    </nav>
+
+    <main>
+        {{/* Loading indicator: Initially hidden, shown during HTMX requests targeting #gallery-items */}}
+        <div class="htmx-indicator loading-indicator">Loading gallery items...</div> 
+
+        <div id="gallery-items" 
+             {{/* class="htmx-indicator" removed */}} 
+             hx-get="/gallery/items?key={{ .CurrentKey }}{{ if .ActiveTag }}&tag={{ .ActiveTag }}{{ end }}{{ if .SortOrder }}&sort={{ .SortOrder }}{{ end }}" 
+             {{/* hx-trigger="every 60s" */}} {{/* Temporarily disable polling trigger for debugging */}}
+             hx-swap="innerHTML">
+            {{/* Render initial items directly */}}
+            {{ template "gallery_items.html" . }}
+        </div>
+    </main>
+
+</body>
+</html>
+
+{{ define "gallery_items.html" }}
+    {{ if not .Files }}
+        <p>No files found.</p>
+    {{ else }}
+        {{ range .Files }}
+        <div class="gallery-item">
+            {{/* Link to detail still includes key if needed there, but src URLs do not */}}
+            <a href="/detail/{{ .Name }}?key={{ $.CurrentKey }}">
+                {{ if eq (printf "%.5s" .MimeType) "image" }}
+                    {{/* Removed loading=lazy */}}
+                    <img src="/thumbnail/{{ .Name }}" alt="{{ .Description }}">
+                {{ else if eq (printf "%.5s" .MimeType) "video" }}
+                    {{/* Removed ?key=... from src */}}
+                    <video muted loop autoplay src="/{{ .Name }}" title="{{ .Name }}"></video>
+                {{ else if eq (printf "%.5s" .MimeType) "audio" }}
+                     <span class="gallery-item-icon">&#127925;</span> <!-- Music note emoji -->
+                {{ else if eq (printf "%.4s" .MimeType) "text" }}
+                     <div class="gallery-item-text-snippet">{{ .Snippet | default "(Text file)" }}</div>
+                {{ else }}
+                    <span class="gallery-item-icon">&#128196;</span> <!-- Document emoji -->
+                {{ end }}
+                
+                {{/* Hover Details Overlay */}}
+                <div class="gallery-item-details">
+                    <p title="{{ .Name }}"><strong>File:</strong> {{ .Name }}</p>
+                    <p><strong>Size:</strong> {{ formatBytes .Size }}</p>
+                    {{ if .Tags }}
+                    <p title="{{ range $i, $tag := .Tags }}{{ if $i }} {{ end }}#{{ $tag }}{{ end }}"><strong>Tags:</strong> {{ range $i, $tag := .Tags }}{{ if $i }}, {{ end }}#{{ $tag }}{{ end }}</p>
+                    {{ end }}
+                    {{ if .Description }}
+                    <p title="{{ .Description }}"><strong>Desc:</strong> {{ .Description }}</p>
+                    {{ end }}
+                </div>
+            </a>
+            {{ if $.IsAdmin }}
+                {{/* Delete button still uses key */}}
+                <button class="delete-button" 
+                        hx-delete="/{{ .Name }}?key={{ $.CurrentKey }}" 
+                        hx-confirm="Are you sure you want to delete {{ .Name }}?" 
+                        hx-target="closest .gallery-item" 
+                        hx-swap="outerHTML">X</button>
+            {{ end }}
+        </div>
+        {{ end }}
+    {{ end }}
+{{ end }} 

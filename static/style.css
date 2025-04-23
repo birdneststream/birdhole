@@ -1,0 +1,485 @@
+/* Basic styles for Birdhole Simplified */
+
+body {
+    font-family: sans-serif;
+    margin: 0;
+    background-color: #282c34;
+    color: #abb2bf;
+}
+
+header {
+    background-color: #21252b;
+    padding: 10px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #181a1f;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 1.5em;
+    color: #61afef;
+}
+
+nav {
+    padding: 10px 20px;
+    background-color: #2c313a;
+    border-bottom: 1px solid #181a1f;
+}
+
+nav ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+nav a, nav select, nav button {
+    display: inline-block;
+    padding: 5px 10px;
+    background-color: #3e4451;
+    color: #abb2bf;
+    text-decoration: none;
+    border-radius: 4px;
+    border: 1px solid #181a1f;
+    font-size: 0.9em;
+    cursor: pointer;
+}
+
+nav a:hover, nav select:hover, nav button:hover {
+    background-color: #4b5263;
+}
+
+nav .active {
+    background-color: #61afef;
+    color: #282c34;
+}
+
+/* Remove padding from main container if it's only for gallery */
+main {
+    padding: 0; 
+}
+
+#gallery-items {
+    display: grid;
+    /* Increase min item width */
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); 
+    gap: 0; /* Remove gap */
+    padding: 0; /* Remove padding */
+}
+
+.gallery-item {
+    background-color: #2c313a; /* Fallback bg */
+    /* border: 1px solid #181a1f; */
+    /* border-radius: 5px; */ 
+    overflow: hidden;
+    position: relative; /* Needed for absolute positioning of details */
+    /* aspect-ratio: 1 / 1; */ /* REMOVED fixed aspect ratio */
+    display: flex; /* Keep flex for basic layout */
+    /* align-items: center; */ /* REMOVED */
+    /* justify-content: center; */ /* REMOVED */
+    text-align: center;
+    /* line-height: 0; */ /* REMOVED */
+}
+
+.gallery-item a {
+    display: block;
+    width: 100%;
+    /* height: 100%; */ /* Height is now auto */
+    color: inherit;
+    text-decoration: none;
+    position: relative; /* Ensure link covers item for hover */
+}
+
+/* Details overlay - initially hidden, covers full item */
+.gallery-item-details {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0; /* Or height: 100% */
+    background-color: rgba(0, 0, 0, 0.7); /* Darker overlay */
+    color: #e0e0e0; /* Lighter text for contrast */
+    padding: 10px;
+    font-size: 0.85em;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
+    pointer-events: none; /* Don't interfere with link clicks */
+    display: flex; /* Use flexbox */
+    flex-direction: column; /* Stack content vertically */
+    justify-content: flex-end; /* Push content to bottom */
+    text-align: left;
+}
+
+/* Show details on hover */
+.gallery-item:hover .gallery-item-details {
+    opacity: 1;
+    visibility: visible;
+}
+
+.gallery-item-details p {
+    margin: 1px 0; /* Tighter spacing */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gallery-item-details p strong {
+    color: #bdbdbd; /* Slightly dimmer strong */
+    margin-right: 4px;
+    display: inline-block;
+    min-width: 35px; /* Smaller min-width */
+}
+
+.gallery-item img, .gallery-item video {
+    /* max-width: 100%; */ 
+    /* max-height: 100%; */
+    object-fit: cover; 
+    display: block; 
+    width: 100%;
+    height: auto; /* Allow natural height */
+    /* Ensure image/video doesn't shrink in flex container */
+    flex-shrink: 0;
+    min-height: 0; /* Fix potential flexbox overflow issue */
+}
+
+.gallery-item-text-snippet {
+    font-size: 0.8em;
+    padding: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 5; /* Limit text snippet */
+    -webkit-box-orient: vertical;
+    width: 100%; /* Ensure text fills width */
+    height: 100%; /* Ensure text fills height */
+    box-sizing: border-box; /* Include padding in size */
+    color: #abb2bf; /* Ensure text color is set */
+    background-color: #21252b; /* Add distinct background */
+}
+
+.gallery-item-icon {
+    font-size: 3em; /* Style for icons (e.g., audio) */
+    color: #61afef;
+}
+
+.delete-button {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background-color: rgba(224, 82, 82, 0.8);
+    color: white;
+    border: none;
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-size: 0.8em;
+    cursor: pointer;
+    z-index: 10;
+}
+
+.delete-button:hover {
+    background-color: rgb(194, 59, 59);
+}
+
+/* Detail View */
+.detail-container {
+    padding: 20px;
+    max-width: 900px;
+    margin: 20px auto;
+    background-color: #2c313a;
+    border: 1px solid #181a1f;
+    border-radius: 5px;
+}
+
+.detail-preview img,
+.detail-preview video,
+.detail-preview audio {
+    max-width: 100%;
+    display: block;
+    margin: 15px auto;
+}
+
+.detail-preview #viewer { /* For panorama */
+    width: 100%;
+    height: 500px;
+    margin: 15px 0;
+}
+
+.detail-metadata {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #3e4451;
+}
+
+.detail-metadata p {
+    margin: 5px 0;
+}
+
+.detail-metadata strong {
+    color: #98c379;
+}
+
+.detail-content {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: #21252b;
+    border-radius: 4px;
+    border: 1px solid #181a1f;
+}
+
+/* Basic styles for rendered markdown */
+.detail-content h1, .detail-content h2, .detail-content h3 {
+    color: #61afef;
+    margin-top: 1em;
+    margin-bottom: 0.5em;
+    border-bottom: 1px solid #3e4451;
+    padding-bottom: 0.3em;
+}
+
+.detail-content p {
+    line-height: 1.6;
+}
+
+.detail-content code {
+    background-color: #3e4451;
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-size: 0.9em;
+}
+
+.detail-content pre {
+    background-color: #21252b;
+    border: 1px solid #181a1f;
+    padding: 10px;
+    border-radius: 4px;
+    overflow-x: auto;
+}
+
+.detail-content pre code {
+    background-color: transparent;
+    padding: 0;
+}
+
+.detail-content blockquote {
+    border-left: 4px solid #5c6370;
+    padding-left: 10px;
+    margin-left: 0;
+    color: #98c379;
+}
+
+.detail-content ul, .detail-content ol {
+    padding-left: 20px;
+}
+
+.detail-content table {
+    border-collapse: collapse;
+    margin: 1em 0;
+    width: 100%;
+}
+
+.detail-content th, .detail-content td {
+    border: 1px solid #3e4451;
+    padding: 8px;
+}
+
+.detail-content th {
+    background-color: #2c313a;
+}
+
+/* HTMX indicator */
+.htmx-indicator{
+    opacity:0;
+    transition: opacity 200ms ease-in;
+}
+.htmx-request .htmx-indicator{
+    opacity:1
+}
+.htmx-request.htmx-indicator{
+    opacity:1
+}
+
+/* Style for the added loading indicator */
+.loading-indicator {
+    padding: 10px;
+    text-align: center;
+    color: #61afef;
+}
+
+/* === Detail Page Enhancements === */
+
+.detail-header {
+    background-color: #21252b;
+    padding: 15px 25px;
+    border-bottom: 1px solid #181a1f;
+}
+
+.back-link {
+    color: #61afef;
+    text-decoration: none;
+    display: block;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+}
+
+.back-link:hover {
+    text-decoration: underline;
+}
+
+.detail-header h2 {
+    margin: 0 0 5px 0;
+    font-size: 1.8em;
+    color: #e5c07b;
+}
+
+.detail-description {
+    margin: 0;
+    color: #98c379;
+    font-size: 1em;
+}
+
+/* Container for the main content below the header */
+.detail-container {
+    padding: 20px;
+}
+
+/* Grid layout for info blocks */
+.detail-info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); /* Adjust minmax as needed */
+    gap: 20px;
+    margin-bottom: 20px; /* Space before metadata/content */
+}
+
+/* Common styling for info blocks */
+.info-block {
+    background-color: #2c313a;
+    border: 1px solid #181a1f;
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 20px; /* Add margin for blocks outside the grid too */
+}
+
+.info-block h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #61afef;
+    font-size: 1.1em;
+    border-bottom: 1px solid #3e4451;
+    padding-bottom: 8px;
+}
+
+.info-block p {
+    margin: 8px 0;
+    font-size: 0.95em;
+}
+
+.info-block p strong {
+    color: #98c379;
+    margin-right: 5px;
+    display: inline-block;
+    min-width: 90px; /* Align labels somewhat */
+}
+
+/* Tags Block Specifics */
+.detail-tags {
+    /* This block might span full width if not in grid, handled by placement */
+    /* margin-bottom: 20px; */ /* Use common info-block margin */
+}
+
+.tag-badge {
+    display: inline-block;
+    background-color: #3e4451;
+    color: #abb2bf;
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin-right: 5px;
+    margin-bottom: 5px; /* Allow wrapping */
+    font-size: 0.85em;
+}
+
+/* Action Buttons */
+.action-button {
+    display: block; /* Stack buttons */
+    width: 100%;
+    padding: 10px 15px;
+    margin-bottom: 10px;
+    border: none;
+    border-radius: 4px;
+    font-size: 1em;
+    text-align: center;
+    cursor: pointer;
+    text-decoration: none; /* For link styled as button */
+    box-sizing: border-box; /* Ensure padding doesn't increase width */
+}
+
+.action-button:last-child {
+    margin-bottom: 0;
+}
+
+.download-button {
+    background-color: #61afef;
+    color: #282c34;
+}
+
+.download-button:hover {
+    background-color: #529bcf;
+}
+
+.delete-button {
+    background-color: #e06c75;
+    color: #282c34;
+}
+
+.delete-button:hover {
+    background-color: #be5046;
+}
+
+/* Custom Metadata Table */
+.metadata-block table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+}
+
+.metadata-block th,
+.metadata-block td {
+    border: 1px solid #3e4451;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    word-break: break-all; /* Prevent long values overflowing */
+}
+
+.metadata-block th {
+    background-color: #21252b;
+    color: #98c379;
+    width: 30%; /* Adjust width as needed */
+}
+
+/* Rendered Content Preview */
+.detail-content {
+    /* Use common info-block styling */
+}
+
+.detail-preview img,
+.detail-preview video,
+.detail-preview audio {
+    max-width: 100%;
+    display: block;
+    margin: 0 auto 20px auto; /* Center preview, add bottom margin */
+    border-radius: 4px;
+}
+
+.detail-preview #panorama-viewer { /* For panorama */
+    width: 100%;
+    height: 500px;
+    margin-bottom: 20px; /* Add bottom margin */
+}
+
+/* Original detail metadata/content styles might need removal or adjustment */
+/* Remove old .detail-metadata and .detail-content styles if they conflict */
+/*.detail-metadata { ... } */
+/*.detail-content { ... } */

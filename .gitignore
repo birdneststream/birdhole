@@ -1,0 +1,48 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Output of go build
+birdhole
+
+# Test binary, built with `go test -c`
+*.test
+
+# Build tags output
+*.out
+
+# Dependency directories (remove the comment below if you vendor)
+# vendor/
+
+# Environment configuration
+.env
+*.env
+
+# Log files
+*.log
+log.txt
+
+# Database files
+*.db
+birdhole.db
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE/Editor specific files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws 
+
+config.toml
