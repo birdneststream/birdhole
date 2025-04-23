@@ -31,27 +31,34 @@ func (h *Handlers) renderGallery(w http.ResponseWriter, r *http.Request, isParti
 	log := h.Log.With("handler", "renderGallery")
 
 	// Determine the correct template name/block based on the request context
-	templateName := "gallery.html" // Default: full page
-
-	// Check the source of the request - was it GalleryItemsHandler or partial GalleryHandler?
-	// Distinguish between rendering just items vs rendering nav+items.
-	// We use the `isPartial` flag and potentially check the request path or a specific param if needed.
-	// Let's redefine isPartial: true means render a block, false means render the full page.
-	// We need a way to know WHICH block to render.
-
-	// Simplification: Let's assume GalleryItemsHandler always renders items,
-	// and GalleryHandler with partial=true renders the content block.
-
-	// Check if the request path is for items specifically
-	if strings.HasSuffix(r.URL.Path, "/items") {
-		templateName = "gallery_items.html" // Target the items block directly
-		log = log.With("render_mode", "items_only")
-	} else if isPartial { // This means GalleryHandler was called with partial=true
-		templateName = "gallery-content" // Target the content block defined in gallery.html
-		log = log.With("render_mode", "content_block")
-	} else {
+	// --- REVISED TEMPLATE LOGIC ---
+	var templateName string
+	if !isPartial {
+		// If the handler determined this is NOT a partial request (e.g., direct load or refresh),
+		// ALWAYS render the full page, regardless of path.
+		templateName = "gallery.html"
 		log = log.With("render_mode", "full_page")
+	} else {
+		// If it IS a partial request, determine WHICH block based on path.
+		if strings.HasSuffix(r.URL.Path, "/items") {
+			// HTMX request for just the items (filtering, sorting)
+			templateName = "gallery_items.html"
+			log = log.With("render_mode", "items_only (partial)")
+		} else {
+			// HTMX request for the content block (polling via /gallery?partial=true)
+			templateName = "gallery-content"
+			log = log.With("render_mode", "content_block (partial)")
+		}
 	}
+
+	// Sanity check - ensure a template name was set
+	if templateName == "" {
+		// This case should ideally not be reached with the logic above
+		log.Error("Could not determine template name", "path", r.URL.Path, "isPartial", isPartial)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	// --- END REVISED TEMPLATE LOGIC ---
 
 	// --- Authentication/Authorization ---
 	// For the public gallery route, admin status for display purposes
@@ -238,6 +245,19 @@ func (h *Handlers) renderGallery(w http.ResponseWriter, r *http.Request, isParti
 
 // GalleryHandler serves the full gallery page HTML or just the content block.
 func (h *Handlers) GalleryHandler(w http.ResponseWriter, r *http.Request) {
+	// --- Check for Direct Refresh on /gallery/items URL ---
+	// If the path is /gallery/items BUT it's NOT an HTMX request,
+	// it means the user refreshed the page on that specific URL.
+	// We should serve the full page, applying the filters from the URL.
+	// if strings.HasSuffix(r.URL.Path, "/items") && r.Header.Get("HX-Request") != "true" {
+	// 	log := h.Log.With("handler", "GalleryHandler")
+	// 	log.Debug("Handling direct browser request (refresh) on /gallery/items path", "url", r.URL.String())
+	// 	// Render the full page, using the query params from the /items URL
+	// 	h.renderGallery(w, r, false)
+	// 	return // Stop processing here
+	// }
+	// --- End Refresh Check ---
+
 	// Check if it's a partial request (e.g., from polling)
 	isPartialContent := r.URL.Query().Get("partial") == "true"
 
@@ -254,6 +274,20 @@ func (h *Handlers) GalleryHandler(w http.ResponseWriter, r *http.Request) {
 // GalleryItemsHandler serves the partial HTML fragment containing just the gallery items.
 // This is typically triggered by HTMX for tag filtering, sorting, or auto-refresh.
 func (h *Handlers) GalleryItemsHandler(w http.ResponseWriter, r *http.Request) {
+	// --- Check for Direct Browser Request (Refresh) ---
+	// If the HX-Request header is NOT present, it's a normal browser request (e.g., refresh)
+	// In this case, render the FULL page, not just the items fragment.
+	if r.Header.Get("HX-Request") != "true" {
+		log := h.Log.With("handler", "GalleryItemsHandler")
+		log.Debug("Handling direct browser request (refresh) on /gallery/items path", "url", r.URL.String())
+		// Render the full page, applying filters from the URL
+		h.renderGallery(w, r, false)
+		return // Stop processing here
+	}
+	// --- End Refresh Check ---
+
+	// If it IS an HTMX request, proceed to render just the items block.
+
 	// This handler always renders just the items template block.
 	// We still call renderGallery to fetch and filter data,
 	// but we will explicitly execute the items template.
