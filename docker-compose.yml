@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  birdhole:
+    build: . # Build from Dockerfile in the current directory
+    image: birdhole-app # Optional: name the image
+    container_name: birdhole_container # Optional: name the container
+    ports:
+      - "9999:9999" # Map host port 9999 to container port 9999
+    volumes:
+      # Mount the database directory for persistence
+      # Assumes BitcaskPath in config.toml is relative like './birdhole.db'
+      # The path inside the container must match the WORKDIR + relative BitcaskPath
+      - ./birdhole.db:/app/birdhole.db 
+      # Mount the config file for easy configuration
+      - ./config.toml:/app/config.toml # Mounts the config file from host
+    environment:
+      TZ: Etc/UTC # Set timezone if needed (alpine image includes tzdata)
+    restart: unless-stopped # Restart policy
+    # Optional: Healthcheck (example assumes a simple HTTP check)
+    # healthcheck:
+    #   test: ["CMD", "wget", "--spider", "http://localhost:8080/"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3 

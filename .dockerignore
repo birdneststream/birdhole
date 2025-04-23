@@ -1,0 +1,20 @@
+# Git files
+.git
+
+# Docker files
+Dockerfile
+docker-compose.yml
+
+# Database data (mount via volume instead)
+*.db
+
+# Log files
+*.log
+log.txt
+
+# IDE/Editor specific
+.vscode/
+.idea/
+
+# Go build cache/modules
+vendor/ 
