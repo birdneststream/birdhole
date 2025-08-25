@@ -434,19 +434,12 @@ main {
     color: #61afef;
 }
 
-/* Load more indicator */
-.load-more-indicator {
-    padding: 20px;
-    text-align: center;
-    color: #61afef;
-    font-style: italic;
-}
-
+/* Load more trigger - now invisible for infinite scroll */
 #load-more-trigger {
-    min-height: 50px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    visibility: hidden;
+    height: 1px;
+    margin: 0;
+    padding: 0;
 }
 
 /* === Detail Page Enhancements === */

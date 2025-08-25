@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -52,10 +53,22 @@ func NewStorage(cfg *config.Config, logger *slog.Logger) (*Storage, error) {
 	dbPath := cfg.BitcaskPath // Corrected field name
 	log := logger.With("component", "storage")
 
-	// Ensure the storage directory exists
+	// Ensure the storage directories exist
 	if err := os.MkdirAll(dbPath, 0755); err != nil {
 		log.Error("Failed to create storage directory", "path", dbPath, "error", err)
 		return nil, fmt.Errorf("failed to create storage directory %q: %w", dbPath, err)
+	}
+
+	// Create files directory
+	if err := os.MkdirAll(cfg.FilesPath, 0755); err != nil {
+		log.Error("Failed to create files directory", "path", cfg.FilesPath, "error", err)
+		return nil, fmt.Errorf("failed to create files directory %q: %w", cfg.FilesPath, err)
+	}
+
+	// Create thumbnails directory
+	if err := os.MkdirAll(cfg.ThumbnailsPath, 0755); err != nil {
+		log.Error("Failed to create thumbnails directory", "path", cfg.ThumbnailsPath, "error", err)
+		return nil, fmt.Errorf("failed to create thumbnails directory %q: %w", cfg.ThumbnailsPath, err)
 	}
 
 	// Set max value size to 100 MB
@@ -94,13 +107,21 @@ func fileKey(filename string) []byte {
 	return []byte(filePrefix + filename)
 }
 
-func thumbKey(filename string) []byte {
-	return []byte(thumbPrefix + filename)
-}
 
 // Helper function to create view hash keys
 func viewHashKey(filename string) []byte {
 	return []byte(viewHashPrefix + filename)
+}
+
+// ThumbnailFilename generates thumbnail filename by replacing extension with .jpg
+func ThumbnailFilename(filename string) string {
+	ext := filepath.Ext(filename)
+	if ext != "" {
+		// Replace extension with .jpg
+		return filename[:len(filename)-len(ext)] + ".jpg"
+	}
+	// No extension, just add .jpg
+	return filename + ".jpg"
 }
 
 // GenerateUniqueFilename creates a short, random, unique base32 filename of the specified length.
@@ -151,28 +172,32 @@ func (s *Storage) GenerateUniqueFilename(ctx context.Context, extension string, 
 // Optionally stores compressed thumbnail data.
 func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, contentBytes []byte, compressedThumbnailBytes []byte) error {
 	mKey := metaKey(filename)
-	fKey := fileKey(filename)
-	tKey := thumbKey(filename)
 
-	// Content already read into contentBytes
+	// Write file content directly to filesystem
+	filePath := filepath.Join(s.cfg.FilesPath, filename)
+	if err := os.WriteFile(filePath, contentBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write file to disk: %w", err)
+	}
 
-	// Compress content (original file)
-	var compressedBuf bytes.Buffer
-	// Use DefaultCompression as a better balance between speed and size
-	gzWriter, err := gzip.NewWriterLevel(&compressedBuf, gzip.DefaultCompression)
-	if err != nil {
-		return fmt.Errorf("failed to create gzip writer for content: %w", err)
+	// Write thumbnail to filesystem if provided
+	if compressedThumbnailBytes != nil {
+		thumbnailPath := filepath.Join(s.cfg.ThumbnailsPath, ThumbnailFilename(filename))
+		// Decompress thumbnail before writing to disk
+		decompressed, err := DecompressContent(compressedThumbnailBytes)
+		if err != nil {
+			s.log.Warn("Failed to decompress thumbnail, storing compressed", "filename", filename, "error", err)
+			// Store compressed if decompression fails
+			if err := os.WriteFile(thumbnailPath, compressedThumbnailBytes, 0644); err != nil {
+				return fmt.Errorf("failed to write compressed thumbnail to disk: %w", err)
+			}
+		} else {
+			if err := os.WriteFile(thumbnailPath, decompressed, 0644); err != nil {
+				return fmt.Errorf("failed to write thumbnail to disk: %w", err)
+			}
+		}
 	}
-	if _, err = gzWriter.Write(contentBytes); err != nil {
-		gzWriter.Close()
-		return fmt.Errorf("failed to compress content: %w", err)
-	}
-	if err := gzWriter.Close(); err != nil {
-		return fmt.Errorf("failed to close gzip writer: %w", err)
-	}
-	compressedBytes := compressedBuf.Bytes()
 
-	// Marshal the metadata
+	// Marshal the metadata (still store in Bitcask)
 	metaData, err := json.Marshal(info)
 	if err != nil {
 		return fmt.Errorf("failed to marshal file.Info: %w", err)
@@ -181,67 +206,42 @@ func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Store metadata
+	// Store only metadata in Bitcask now
 	err = s.db.Put(mKey, metaData)
 	if err != nil {
 		s.log.Error("Failed to put metadata in storage", "filename", filename, "key", string(mKey), "error", err)
+		// Clean up filesystem files if metadata storage fails
+		os.Remove(filePath)
+		if compressedThumbnailBytes != nil {
+			thumbnailPath := filepath.Join(s.cfg.ThumbnailsPath, ThumbnailFilename(filename))
+			os.Remove(thumbnailPath)
+		}
 		return fmt.Errorf("failed to put metadata for %q: %w", filename, err)
 	}
 
-	// Store main file content
-	err = s.db.Put(fKey, compressedBytes)
-	if err != nil {
-		s.log.Error("Failed to put content in storage", "filename", filename, "key", string(fKey), "error", err)
-		// Attempt to delete the metadata we just wrote if content write fails
-		delErr := s.db.Delete(mKey)
-		if delErr != nil {
-			s.log.Error("Failed to rollback metadata write after content write failure", "filename", filename, "key", string(mKey), "delete_error", delErr)
-		}
-		return fmt.Errorf("failed to put content for %q: %w", filename, err)
-	}
-
-	// Store thumbnail content (if provided)
-	if compressedThumbnailBytes != nil {
-		err = s.db.Put(tKey, compressedThumbnailBytes)
-		if err != nil {
-			// Log the error but don't fail the whole operation?
-			// If thumbnail fails, the main file is still there.
-			// Maybe log a warning and continue.
-			s.log.Warn("Failed to put thumbnail in storage (continuing)", "filename", filename, "key", string(tKey), "error", err)
-			// If we wanted strict atomicity, we'd need to rollback meta and file here.
-			// For simplicity, we'll allow thumbnails to fail independently for now.
-		} else {
-			s.log.Debug("Thumbnail stored successfully", "filename", filename, "compressed_size", len(compressedThumbnailBytes))
-		}
-	}
-
-	s.log.Info("File stored successfully", "filename", filename, "original_size", len(contentBytes), "compressed_size", len(compressedBytes))
+	s.log.Info("File stored successfully", "filename", filename, "original_size", len(contentBytes), "metadata_stored", true)
 	return nil
 }
 
-// GetStoredObject retrieves the metadata and compressed content from separate keys.
+// GetStoredObject retrieves the metadata from Bitcask and content from filesystem.
 func (s *Storage) GetStoredObject(ctx context.Context, filename string) (*StoredObject, error) {
 	mKey := metaKey(filename)
-	fKey := fileKey(filename)
 
-	var infoData, contentGz []byte
+	var infoData []byte
 	var info file.Info
 	var getErr error
 
+	// Get metadata from Bitcask
 	s.mu.RLock()
 	infoData, getErr = s.db.Get(mKey)
-	if getErr == nil {
-		// Only get content if metadata was found
-		contentGz, getErr = s.db.Get(fKey)
-	}
 	s.mu.RUnlock()
 
 	if getErr != nil {
 		if errors.Is(getErr, bitcask.ErrKeyNotFound) {
-			s.log.Warn("File meta or content not found in storage", "filename", filename, "key", string(mKey)+" or "+string(fKey))
+			s.log.Warn("File metadata not found in storage", "filename", filename, "key", string(mKey))
 			return nil, fmt.Errorf("%w: file %q", os.ErrNotExist, filename)
 		}
-		s.log.Error("Failed to get file meta or content from storage", "filename", filename, "key", string(mKey)+" or "+string(fKey), "error", getErr)
+		s.log.Error("Failed to get file metadata from storage", "filename", filename, "key", string(mKey), "error", getErr)
 		return nil, fmt.Errorf("failed to get file %q: %w", filename, getErr)
 	}
 
@@ -251,43 +251,60 @@ func (s *Storage) GetStoredObject(ctx context.Context, filename string) (*Stored
 		return nil, fmt.Errorf("failed to unmarshal metadata for %q: %w", filename, err)
 	}
 
-	storedObj := &StoredObject{
-		Metadata:  info,
-		ContentGz: contentGz,
+	// Read content from filesystem
+	filePath := filepath.Join(s.cfg.FilesPath, filename)
+	contentBytes, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.log.Warn("File content not found on filesystem", "filename", filename, "path", filePath)
+			return nil, fmt.Errorf("%w: file %q", os.ErrNotExist, filename)
+		}
+		s.log.Error("Failed to read file content from filesystem", "filename", filename, "path", filePath, "error", err)
+		return nil, fmt.Errorf("failed to read file %q: %w", filename, err)
 	}
 
-	s.log.Debug("Retrieved stored object", "filename", filename)
+	storedObj := &StoredObject{
+		Metadata:  info,
+		ContentGz: contentBytes, // Now uncompressed content from filesystem
+	}
+
+	s.log.Debug("Retrieved stored object from filesystem", "filename", filename)
 	return storedObj, nil
 }
 
-// PutThumbnail stores only the compressed thumbnail data.
+// PutThumbnail stores thumbnail data to filesystem.
 func (s *Storage) PutThumbnail(ctx context.Context, filename string, compressedThumbnailBytes []byte) error {
-	tKey := thumbKey(filename)
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	thumbnailPath := filepath.Join(s.cfg.ThumbnailsPath, ThumbnailFilename(filename))
 
-	if err := s.db.Put(tKey, compressedThumbnailBytes); err != nil {
-		s.log.Error("Failed to put thumbnail data in storage", "filename", filename, "key", string(tKey), "error", err)
-		return fmt.Errorf("failed to put thumbnail data for %q: %w", filename, err)
+	// Decompress thumbnail before writing to disk
+	decompressed, err := DecompressContent(compressedThumbnailBytes)
+	if err != nil {
+		s.log.Warn("Failed to decompress thumbnail, storing compressed", "filename", filename, "error", err)
+		// Store compressed if decompression fails
+		if err := os.WriteFile(thumbnailPath, compressedThumbnailBytes, 0644); err != nil {
+			return fmt.Errorf("failed to write compressed thumbnail to disk: %w", err)
+		}
+	} else {
+		if err := os.WriteFile(thumbnailPath, decompressed, 0644); err != nil {
+			return fmt.Errorf("failed to write thumbnail to disk: %w", err)
+		}
 	}
-	s.log.Debug("Standalone thumbnail stored successfully", "filename", filename, "compressed_size", len(compressedThumbnailBytes))
+
+	s.log.Debug("Standalone thumbnail stored to filesystem", "filename", filename, "path", thumbnailPath)
 	return nil
 }
 
-// GetThumbnail retrieves the compressed thumbnail data.
+// GetThumbnail retrieves thumbnail data from filesystem.
 func (s *Storage) GetThumbnail(ctx context.Context, filename string) ([]byte, error) {
-	tKey := thumbKey(filename)
-	s.mu.RLock()
-	thumbnailData, err := s.db.Get(tKey)
-	s.mu.RUnlock()
+	thumbnailPath := filepath.Join(s.cfg.ThumbnailsPath, ThumbnailFilename(filename))
 
+	thumbnailData, err := os.ReadFile(thumbnailPath)
 	if err != nil {
-		if errors.Is(err, bitcask.ErrKeyNotFound) {
-			s.log.Debug("Thumbnail not found in storage", "filename", filename, "key", string(tKey))
-			// Return os.ErrNotExist so the caller can handle it (e.g., 404)
+		if os.IsNotExist(err) {
+			s.log.Debug("Thumbnail not found on filesystem", "filename", filename, "path", thumbnailPath)
 			return nil, fmt.Errorf("%w: thumbnail for %q", os.ErrNotExist, filename)
 		}
-		s.log.Error("Failed to get thumbnail from storage", "filename", filename, "key", string(tKey), "error", err)
+		s.log.Error("Failed to read thumbnail from filesystem", "filename", filename, "path", thumbnailPath, "error", err)
 		return nil, fmt.Errorf("failed to get thumbnail %q: %w", filename, err)
 	}
 	s.log.Debug("Retrieved thumbnail from storage", "filename", filename, "compressed_size", len(thumbnailData))
@@ -450,7 +467,7 @@ func (s *Storage) GetAllFilesInfo(ctx context.Context) ([]file.Info, error) {
 	// Use a shorter lock duration and release between operations
 	s.mu.RLock()
 	defer s.mu.RUnlock() // Ensure unlock happens
-	
+
 	err := s.db.Scan([]byte(metaPrefix), func(key []byte) error {
 		// Check context cancellation within the loop
 		select {
@@ -496,8 +513,6 @@ func (s *Storage) GetAllFilesInfo(ctx context.Context) ([]file.Info, error) {
 // DeleteFile removes the file metadata, content, and thumbnail (if exists) from storage.
 func (s *Storage) DeleteFile(ctx context.Context, filename string) error {
 	mKey := metaKey(filename)
-	fKey := fileKey(filename)
-	tKey := thumbKey(filename)
 	vKey := viewHashKey(filename)
 
 	s.mu.Lock()
@@ -510,28 +525,28 @@ func (s *Storage) DeleteFile(ctx context.Context, filename string) error {
 		return fmt.Errorf("%w: file metadata %q not found", os.ErrNotExist, filename)
 	}
 
-	// Delete metadata
+	// Delete metadata from Bitcask
 	err := s.db.Delete(mKey)
 	if err != nil {
-		// Log error but continue attempting to delete other keys
 		s.log.Error("Failed to delete metadata", "filename", filename, "key", string(mKey), "error", err)
-		// We might return this error at the end, but try to clean up others first.
 	}
 
-	// Delete file content
-	errContent := s.db.Delete(fKey)
-	if errContent != nil && !errors.Is(errContent, bitcask.ErrKeyNotFound) {
-		s.log.Error("Failed to delete file content", "filename", filename, "key", string(fKey), "error", errContent)
-		if err == nil { // Keep the first error encountered
-			err = errContent
+	// Delete file from filesystem
+	filePath := filepath.Join(s.cfg.FilesPath, filename)
+	errFile := os.Remove(filePath)
+	if errFile != nil && !os.IsNotExist(errFile) {
+		s.log.Error("Failed to delete file from filesystem", "filename", filename, "path", filePath, "error", errFile)
+		if err == nil {
+			err = errFile
 		}
 	}
 
-	// Delete thumbnail (ignore ErrKeyNotFound)
-	errThumb := s.db.Delete(tKey)
-	if errThumb != nil && !errors.Is(errThumb, bitcask.ErrKeyNotFound) {
-		s.log.Error("Failed to delete thumbnail", "filename", filename, "key", string(tKey), "error", errThumb)
-		if err == nil { // Keep the first error encountered
+	// Delete thumbnail from filesystem
+	thumbnailPath := filepath.Join(s.cfg.ThumbnailsPath, ThumbnailFilename(filename))
+	errThumb := os.Remove(thumbnailPath)
+	if errThumb != nil && !os.IsNotExist(errThumb) {
+		s.log.Error("Failed to delete thumbnail from filesystem", "filename", filename, "path", thumbnailPath, "error", errThumb)
+		if err == nil {
 			err = errThumb
 		}
 	}
@@ -540,13 +555,12 @@ func (s *Storage) DeleteFile(ctx context.Context, filename string) error {
 	errView := s.db.Delete(vKey)
 	if errView != nil && !errors.Is(errView, bitcask.ErrKeyNotFound) {
 		s.log.Error("Failed to delete view hash data", "filename", filename, "key", string(vKey), "error", errView)
-		if err == nil { // Keep the first error encountered
+		if err == nil {
 			err = errView
 		}
 	}
 
 	if err != nil {
-		// Return the first error encountered during deletions
 		return fmt.Errorf("failed during deletion process for %q: %w", filename, err)
 	}
 

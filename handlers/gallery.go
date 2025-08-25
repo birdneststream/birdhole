@@ -241,7 +241,7 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 // LoadMoreItemsHandler handles pagination for gallery items
 func (h *Handlers) LoadMoreItemsHandler(w http.ResponseWriter, r *http.Request) {
 	log := h.Log.With("handler", "LoadMoreItemsHandler")
-	
+
 	// Get gallery data
 	data, err := h.prepareGalleryData(r)
 	if err != nil {
@@ -254,7 +254,7 @@ func (h *Handlers) LoadMoreItemsHandler(w http.ResponseWriter, r *http.Request) 
 		}
 		return
 	}
-	
+
 	// Get offset from query params
 	offsetStr := r.URL.Query().Get("offset")
 	offset := 0
@@ -263,47 +263,44 @@ func (h *Handlers) LoadMoreItemsHandler(w http.ResponseWriter, r *http.Request) 
 			offset = parsedOffset
 		}
 	}
-	
+
 	files, ok := data["Files"].([]templates.FileInfoWrapper)
 	if !ok {
 		fmt.Fprintf(w, `<div class="error-message">No more items to load.</div>`)
 		return
 	}
-	
+
 	// Slice files based on offset
-	pageSize := 20
+	pageSize := 50
 	start := offset
 	end := offset + pageSize
-	
+
 	if start >= len(files) {
 		// No more items
 		return
 	}
-	
+
 	if end > len(files) {
 		end = len(files)
 	}
-	
+
 	pagedFiles := files[start:end]
 	data["Files"] = pagedFiles
-	
+
 	// Set content type
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	
-	// Render just the gallery items for this batch
-	for _, file := range pagedFiles {
-		// Render a basic item
-		fmt.Fprintf(w, `
-		<div class="gallery-item">
-			<a href="/detail/%s?key=%s">
-				<img src="/thumbnail/%s" alt="%s" loading="lazy">
-				<div class="gallery-item-details">
-					<p title="%s"><strong>File:</strong> %s</p>
-				</div>
-			</a>
-		</div>`, file.Name, data["CurrentKey"], file.Name, file.Description, file.Name, file.Name)
+
+	// Update data with paged files
+	data["Files"] = pagedFiles
+
+	// Use the template to render items properly
+	err = h.Tmpl.ExecuteTemplate(w, "gallery_items_batch.html", data)
+	if err != nil {
+		log.Error("Failed to execute gallery items batch template", "error", err)
+		fmt.Fprintf(w, `<div class="error-message">Error loading items.</div>`)
+		return
 	}
-	
+
 	// Add new load-more trigger if there are more items
 	if end < len(files) {
 		newOffset := end
@@ -314,8 +311,8 @@ func (h *Handlers) LoadMoreItemsHandler(w http.ResponseWriter, r *http.Request) 
 			 hx-vals='{"offset": "%d"}'
 			 hx-target="#gallery-progressive-container" 
 			 hx-swap="beforeend"
-			 hx-trigger="intersect once">
-			<div class="load-more-indicator">Loading more items...</div>
+			 hx-trigger="intersect once"
+			 style="visibility: hidden; height: 1px;">
 		</div>`, newOffset)
 	}
 }
@@ -380,7 +377,7 @@ func (h *Handlers) renderGallery(w http.ResponseWriter, r *http.Request, isParti
 	// --- Render Template ---
 	// Set content type to ensure proper rendering
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	
+
 	log.Info("Rendering gallery template", "template_target", templateName, "item_count", itemCount)
 	err = h.Tmpl.ExecuteTemplate(w, templateName, data)
 	if err != nil {

@@ -24,7 +24,7 @@ func main() {
 	// loglevel is set after loading config
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)
-	
+
 	// Set GOMAXPROCS to use all available CPU cores
 	// This is usually the default, but making it explicit
 	// runtime.GOMAXPROCS(runtime.NumCPU())
@@ -93,7 +93,6 @@ func main() {
 	// galleryAuth middleware removed
 	mux.Handle("GET /gallery", mw.GalleryRateLimit(mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.GalleryHandler)))))
 	mux.Handle("GET /gallery/items", mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.GalleryItemsHandler))))
-	mux.Handle("GET /gallery/load-more", mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.LoadMoreItemsHandler))))
 	mux.Handle("GET /detail/{filename}", mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.DetailViewHandler))))
 
 	// --- Authenticated routes ---
@@ -111,9 +110,9 @@ func main() {
 	server := &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", config.AppConfig.ListenAddr, config.AppConfig.Port),
 		Handler:           finalHandler,
-		ReadTimeout:       30 * time.Second,  // Increased from 5s to handle uploads
-		ReadHeaderTimeout: 10 * time.Second,  // Added header timeout
-		WriteTimeout:      60 * time.Second,  // Increased from 30s for large files
+		ReadTimeout:       30 * time.Second, // Increased from 5s to handle uploads
+		ReadHeaderTimeout: 10 * time.Second, // Added header timeout
+		WriteTimeout:      60 * time.Second, // Increased from 30s for large files
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1 MB max header
 	}

@@ -21,7 +21,7 @@ A simple, self-hosted, temporary file sharing service with a gallery view, built
 *   **Thumbnail Generation:** Creates thumbnails for image files displayed in the gallery.
 *   **Unique View Counting:** Tracks unique views per file within its lifetime using salted+hashed IP addresses for privacy.
 *   **Docker Support:** Includes `Dockerfile` and `docker-compose.yml` for easy containerization.
-*   **Bitcask Storage:** Uses Bitcask embedded key-value store for metadata and file content.
+*   **Hybrid Storage:** Uses Bitcask embedded key-value store for metadata and filesystem storage for files and thumbnails for optimal performance.
 
 ## Prerequisites
 
@@ -43,6 +43,8 @@ Configuration is managed via a `config.toml` file located in the project root.
         *   `ListenAddr`: Address to bind to (default: `"0.0.0.0"`).
         *   `DefaultExpiry`: Default time before files expire (default: `"24h"`). Use units like `h`, `m`, `s` (e.g., `"168h"` for 7 days).
         *   `BitcaskPath`: Path to the database directory (default: `"./birdhole.db"`). Must match Docker volume mount if using Docker.
+        *   `FilesPath`: Path to store uploaded files (default: `"./files"`). Must match Docker volume mount if using Docker.
+        *   `ThumbnailsPath`: Path to store generated thumbnails (default: `"./thumbnails"`). Must match Docker volume mount if using Docker.
         *   `GalleryKey`: Key required to view the gallery. If empty, the gallery is public (default: `""`).
         *   `MaxUploadSizeMB`: Maximum upload size in megabytes (default: `100`).
         *   `BaseURL`: Base URL for constructing links (default: `"/"`). Ensure trailing slash if not root.
@@ -59,12 +61,14 @@ Configuration is managed via a `config.toml` file located in the project root.
 
 ## Docker Setup
 
-1.  **Configure:** Create and edit `config.toml` in the project root. Ensure `BitcaskPath = "./birdhole.db"` and set a secure `ViewCounterSalt`.
+1.  **Configure:** Create and edit `config.toml` in the project root. Ensure `BitcaskPath = "./birdhole.db"`, `FilesPath = "./files"`, `ThumbnailsPath = "./thumbnails"`, and set a secure `ViewCounterSalt`.
 2.  **Build:** `docker compose build`
 3.  **Run:** `docker compose up -d`
 4.  **Access:** `http://localhost:9999` (or the host port mapped in `docker-compose.yml`).
 5.  **Logs:** `docker compose logs -f birdhole_container`
 6.  **Stop:** `docker compose down`
+
+**Note:** The Docker setup automatically creates and manages the required directories (`./birdhole.db`, `./files`, `./thumbnails`) with proper permissions.
 
 ## Usage / API
 

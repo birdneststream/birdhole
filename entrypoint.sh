@@ -7,6 +7,15 @@
 echo "Fixing ownership for /app/birdhole.db..."
 chown -R appuser:appgroup /app/birdhole.db || echo "Failed to chown /app/birdhole.db (might not be critical if permissions already ok)"
 
+# Set ownership of the files and thumbnails directories
+echo "Fixing ownership for /app/files..."
+mkdir -p /app/files
+chown -R appuser:appgroup /app/files || echo "Failed to chown /app/files"
+
+echo "Fixing ownership for /app/thumbnails..."
+mkdir -p /app/thumbnails
+chown -R appuser:appgroup /app/thumbnails || echo "Failed to chown /app/thumbnails"
+
 # Execute the command passed to the entrypoint (e.g., the CMD from Dockerfile)
 # Use gosu or su-exec to run the command as the non-root user
 # First, install su-exec (simpler than gosu)

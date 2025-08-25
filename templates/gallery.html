@@ -139,23 +139,57 @@
         <main>
             {{/* Loading indicator */}}
             <div class="htmx-indicator loading-indicator">Loading gallery items...</div> 
-            
-            {{/* Progressive loading container */}}
-            <div id="gallery-progressive-container">
-                {{/* Initial batch of items will load here */}}
-                {{ template "gallery_items_initial.html" . }}
-                
-                {{/* Load more trigger - hidden initially if all items loaded */}}
-                <div id="load-more-trigger" 
-                     hx-get="/gallery/load-more" 
-                     hx-include="[name='key'], [name='tag'], [name='show_type'], #sortOrder, #searchQuery"
-                     hx-vals='{"offset": "20"}'
-                     hx-target="#gallery-progressive-container" 
-                     hx-swap="beforeend"
-                     hx-trigger="intersect once"
-                     style="{{ if lt (len .Files) 20 }}display: none;{{ end }}">
-                    <div class="load-more-indicator">Loading more items...</div>
-                </div>
+
+            {{/* Simple gallery items container */}}
+            <div id="gallery-items" class="gallery-grid">
+                {{ if not .Files }}
+                    <p>No files found.</p>
+                {{ else }}
+                    {{ range .Files }}
+                    {{/* Prepare map for query string builder */}}
+                    {{ $galleryParams := dict 
+                        "tag" $.ActiveTag 
+                        "sort" $.SortOrder 
+                        "q" $.SearchQuery 
+                        "show_type" $.ActiveShowMimes 
+                    }}
+                    {{ $queryString := buildQueryString $galleryParams }}
+                    <div class="gallery-item">
+                        {{/* $queryString is now type template.URL, no filter needed */}}
+                        <a href="/detail/{{ .Name }}?key={{ $.CurrentKey }}{{ if $queryString }}&{{ $queryString }}{{ end }}">
+                            {{ if .Info.IsText }}
+                                <div class="gallery-item-text-snippet">{{ .Snippet | default "(Text file)" }}</div>
+                            {{ else if eq (printf "%.5s" .MimeType) "image" }}
+                                <img src="/thumbnail/{{ .Name }}" alt="{{ .Description }}" loading="lazy">
+                            {{ else if eq (printf "%.5s" .MimeType) "video" }}
+                                <video muted loop autoplay playsinline src="/{{ .Name }}" title="{{ .Name }}" loading="lazy" preload="metadata"></video>
+                            {{ else if eq (printf "%.5s" .MimeType) "audio" }}
+                                 <span class="gallery-item-icon">&#127925;</span>
+                            {{ else }}
+                                <span class="gallery-item-icon">&#128196;</span>
+                            {{ end }}
+                            
+                            <div class="gallery-item-details">
+                                <p title="{{ .Name }}"><strong>File:</strong> {{ .Name }}</p>
+                                <p><strong>Size:</strong> {{ formatBytes .Size }}</p>
+                                {{ if .Tags }}
+                                <p title="{{ range $i, $tag := .Tags }}{{ if $i }} {{ end }}#{{ $tag }}{{ end }}"><strong>Tags:</strong> {{ range $i, $tag := .Tags }}{{ if $i }}, {{ end }}#{{ $tag }}{{ end }}</p>
+                                {{ end }}
+                                {{ if .Description }}
+                                <p title="{{ .Description }}"><strong>Desc:</strong> {{ .Description }}</p>
+                                {{ end }}
+                            </div>
+                        </a>
+                        {{ if $.IsAdmin }}
+                            <button class="gallery-item-delete-button" 
+                                    hx-delete="/{{ .Name }}?key={{ $.CurrentKey }}" 
+                                    hx-confirm="Are you sure you want to delete {{ .Name }}?" 
+                                    hx-target="closest .gallery-item" 
+                                    hx-swap="outerHTML">X</button>
+                        {{ end }}
+                    </div>
+                    {{ end }}
+                {{ end }}
             </div>
 
         </main>
@@ -164,62 +198,6 @@
 
 </body>
 </html>
-
-{{ define "gallery_items_initial.html" }}
-<div id="gallery-items" class="gallery-grid">
-    {{ if not .Files }}
-        <p>No files found.</p>
-    {{ else }}
-        {{/* Load first 20 items initially */}}
-        {{ range $index, $file := .Files }}
-            {{ if lt $index 20 }}
-                {{/* Prepare map for query string builder */}}
-                {{ $galleryParams := dict 
-                    "tag" $.ActiveTag 
-                    "sort" $.SortOrder 
-                    "q" $.SearchQuery 
-                    "show_type" $.ActiveShowMimes 
-                }}
-                {{ $queryString := buildQueryString $galleryParams }}
-                <div class="gallery-item">
-                    {{/* $queryString is now type template.URL, no filter needed */}}
-                    <a href="/detail/{{ $file.Name }}?key={{ $.CurrentKey }}{{ if $queryString }}&{{ $queryString }}{{ end }}">
-                        {{ if $file.Info.IsText }}
-                            <div class="gallery-item-text-snippet">{{ $file.Snippet | default "(Text file)" }}</div>
-                        {{ else if eq (printf "%.5s" $file.MimeType) "image" }}
-                            <img src="/thumbnail/{{ $file.Name }}" alt="{{ $file.Description }}" loading="lazy">
-                        {{ else if eq (printf "%.5s" $file.MimeType) "video" }}
-                            <video muted loop autoplay playsinline src="/{{ $file.Name }}" title="{{ $file.Name }}" loading="lazy" preload="metadata"></video>
-                        {{ else if eq (printf "%.5s" $file.MimeType) "audio" }}
-                             <span class="gallery-item-icon">&#127925;</span>
-                        {{ else }}
-                            <span class="gallery-item-icon">&#128196;</span>
-                        {{ end }}
-                        
-                        <div class="gallery-item-details">
-                            <p title="{{ $file.Name }}"><strong>File:</strong> {{ $file.Name }}</p>
-                            <p><strong>Size:</strong> {{ formatBytes $file.Size }}</p>
-                            {{ if $file.Tags }}
-                            <p title="{{ range $i, $tag := $file.Tags }}{{ if $i }} {{ end }}#{{ $tag }}{{ end }}"><strong>Tags:</strong> {{ range $i, $tag := $file.Tags }}{{ if $i }}, {{ end }}#{{ $tag }}{{ end }}</p>
-                            {{ end }}
-                            {{ if $file.Description }}
-                            <p title="{{ $file.Description }}"><strong>Desc:</strong> {{ $file.Description }}</p>
-                            {{ end }}
-                        </div>
-                    </a>
-                    {{ if $.IsAdmin }}
-                        <button class="gallery-item-delete-button" 
-                                hx-delete="/{{ $file.Name }}?key={{ $.CurrentKey }}" 
-                                hx-confirm="Are you sure you want to delete {{ $file.Name }}?" 
-                                hx-target="closest .gallery-item" 
-                                hx-swap="outerHTML">X</button>
-                    {{ end }}
-                </div>
-            {{ end }}
-        {{ end }}
-    {{ end }}
-</div>
-{{ end }}
 
 {{ define "gallery_items.html" }}
     {{ if not .Files }}
@@ -304,4 +282,6 @@
 <div id="active-tag-input-container" hx-swap-oob="true"> {{/* Target for OOB swap */}}
     <input type="hidden" name="tag" value="{{ .ActiveTag }}">
 </div>
-{{ end }} 
+{{ end }}
+
+ 

@@ -1,13 +1,13 @@
 package handlers
 
 import (
-	"crypto/rand"
-	"encoding/base32"
 	"birdhole/file"
 	"birdhole/storage"
 	"birdhole/templates"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base32"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -38,13 +38,13 @@ func randomString(length int) string {
 
 // UploadJob represents an async upload task
 type UploadJob struct {
-	ID            string
-	Status        string // "processing", "completed", "failed"
-	Progress      int    // 0-100
-	URL           string // Result URL when completed
-	Error         string // Error message if failed
-	CreatedAt     time.Time
-	CompletedAt   *time.Time
+	ID          string
+	Status      string // "processing", "completed", "failed"
+	Progress    int    // 0-100
+	URL         string // Result URL when completed
+	Error       string // Error message if failed
+	CreatedAt   time.Time
+	CompletedAt *time.Time
 }
 
 // UploadJobManager manages async upload jobs
@@ -70,7 +70,7 @@ func (m *UploadJobManager) GetJob(id string) (*UploadJob, bool) {
 func (m *UploadJobManager) CreateJob(id string) *UploadJob {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	job := &UploadJob{
 		ID:        id,
 		Status:    "processing",
@@ -78,10 +78,10 @@ func (m *UploadJobManager) CreateJob(id string) *UploadJob {
 		CreatedAt: time.Now(),
 	}
 	m.jobs[id] = job
-	
+
 	// Clean up old jobs (older than 1 hour)
 	go m.cleanupOldJobs()
-	
+
 	return job
 }
 
@@ -89,7 +89,7 @@ func (m *UploadJobManager) CreateJob(id string) *UploadJob {
 func (m *UploadJobManager) UpdateJob(id string, status string, progress int, url string, errorMsg string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	if job, exists := m.jobs[id]; exists {
 		job.Status = status
 		job.Progress = progress
@@ -110,7 +110,7 @@ func (m *UploadJobManager) UpdateJob(id string, status string, progress int, url
 func (m *UploadJobManager) cleanupOldJobs() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	cutoff := time.Now().Add(-1 * time.Hour)
 	for id, job := range m.jobs {
 		if job.CreatedAt.Before(cutoff) {
@@ -134,10 +134,12 @@ func (h *Handlers) AsyncUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Return job ID immediately
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"job_id": jobID,
 		"status": "processing",
-	})
+	}); err != nil {
+		logger.Error("Failed to encode job response", "error", err)
+	}
 
 	// Process upload in background
 	go h.processUploadAsync(r, job, logger)
@@ -148,14 +150,14 @@ func (h *Handlers) processUploadAsync(r *http.Request, job *UploadJob, logger *s
 	// Parse multipart form
 	maxUploadBytes := int64(h.Config.MaxUploadSizeMB) * 1024 * 1024
 	r.Body = http.MaxBytesReader(nil, r.Body, maxUploadBytes)
-	
+
 	memoryLimit := int64(10 * 1024 * 1024) // 10 MB in memory
 	err := r.ParseMultipartForm(memoryLimit)
 	if err != nil {
 		uploadManager.UpdateJob(job.ID, "failed", 0, "", fmt.Sprintf("Failed to parse form: %v", err))
 		return
 	}
-	
+
 	uploadManager.UpdateJob(job.ID, "processing", 20, "", "")
 
 	fileReader, fileHeader, err := r.FormFile("file")
@@ -171,13 +173,13 @@ func (h *Handlers) processUploadAsync(r *http.Request, job *UploadJob, logger *s
 		uploadManager.UpdateJob(job.ID, "failed", 30, "", fmt.Sprintf("Failed to read file: %v", err))
 		return
 	}
-	
+
 	uploadManager.UpdateJob(job.ID, "processing", 40, "", "")
 
 	// Process metadata (similar to original UploadHandler)
 	originalFilename := fileHeader.Filename
 	ext := filepath.Ext(originalFilename)
-	
+
 	// Generate unique filename
 	ctx := context.Background()
 	uniqueFilename, genErr := h.Storage.GenerateUniqueFilename(ctx, ext, 8)
@@ -185,13 +187,13 @@ func (h *Handlers) processUploadAsync(r *http.Request, job *UploadJob, logger *s
 		uploadManager.UpdateJob(job.ID, "failed", 40, "", fmt.Sprintf("Failed to generate filename: %v", genErr))
 		return
 	}
-	
+
 	// Get form values
 	description := r.FormValue("description")
 	message := r.FormValue("message")
 	hidden := r.FormValue("hidden") == "true"
 	panorama := r.FormValue("panorama") == "true"
-	
+
 	// Process tags
 	var tags []string
 	if tagString := r.FormValue("tags"); tagString != "" {
@@ -201,25 +203,25 @@ func (h *Handlers) processUploadAsync(r *http.Request, job *UploadJob, logger *s
 			}
 		}
 	}
-	
+
 	uploadManager.UpdateJob(job.ID, "processing", 50, "", "")
 
 	// Detect MIME type
 	mimeType := http.DetectContentType(contentBytes)
-	
+
 	// Process thumbnails async if it's an image
 	var compressedThumbBytes []byte
 	var width, height int
-	
+
 	if strings.HasPrefix(mimeType, "image/") {
 		uploadManager.UpdateJob(job.ID, "processing", 60, "", "Generating thumbnail...")
-		
+
 		// Get dimensions
 		imgConfig, _, err := image.DecodeConfig(bytes.NewReader(contentBytes))
 		if err == nil {
 			width = imgConfig.Width
 			height = imgConfig.Height
-			
+
 			// Generate thumbnail in background
 			img, _, decodeErr := image.Decode(bytes.NewReader(contentBytes))
 			if decodeErr == nil {
@@ -231,7 +233,7 @@ func (h *Handlers) processUploadAsync(r *http.Request, job *UploadJob, logger *s
 			}
 		}
 	}
-	
+
 	uploadManager.UpdateJob(job.ID, "processing", 80, "", "Storing file...")
 
 	// Create file info
@@ -282,7 +284,9 @@ func (h *Handlers) UploadStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(job)
+	if err := json.NewEncoder(w).Encode(job); err != nil {
+		h.Log.Error("Failed to encode job status", "error", err)
+	}
 }
 
 // StreamGalleryItemsHandler streams gallery items as they're loaded
@@ -291,21 +295,21 @@ func (h *Handlers) StreamGalleryItemsHandler(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	
+
 	// Create a channel to send items
 	itemsChan := make(chan string, 100)
 	done := make(chan bool)
-	
+
 	// Start fetching items in background
 	go h.fetchGalleryItemsAsync(r, itemsChan, done)
-	
+
 	// Stream items as they come
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
 		return
 	}
-	
+
 	for {
 		select {
 		case item := <-itemsChan:
@@ -324,18 +328,18 @@ func (h *Handlers) StreamGalleryItemsHandler(w http.ResponseWriter, r *http.Requ
 // fetchGalleryItemsAsync fetches gallery items in batches
 func (h *Handlers) fetchGalleryItemsAsync(r *http.Request, itemsChan chan<- string, done chan<- bool) {
 	defer close(done)
-	
+
 	// Get gallery data
 	data, err := h.prepareGalleryData(r)
 	if err != nil {
 		return
 	}
-	
+
 	files, ok := data["Files"].([]templates.FileInfoWrapper)
 	if !ok {
 		return
 	}
-	
+
 	// Send items in batches
 	batchSize := 20
 	for i := 0; i < len(files); i += batchSize {
@@ -343,15 +347,15 @@ func (h *Handlers) fetchGalleryItemsAsync(r *http.Request, itemsChan chan<- stri
 		if end > len(files) {
 			end = len(files)
 		}
-		
+
 		batch := files[i:end]
 		batchJSON, err := json.Marshal(batch)
 		if err != nil {
 			continue
 		}
-		
+
 		itemsChan <- string(batchJSON)
-		
+
 		// Small delay to prevent overwhelming the client
 		time.Sleep(10 * time.Millisecond)
 	}

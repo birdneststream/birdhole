@@ -14,6 +14,9 @@ services:
       - ./birdhole.db:/app/birdhole.db 
       # Mount the config file for easy configuration
       - ./config.toml:/app/config.toml # Mounts the config file from host
+      # Mount filesystem storage directories for persistence
+      - ./files:/app/files # Mount files directory
+      - ./thumbnails:/app/thumbnails # Mount thumbnails directory
     environment:
       TZ: Etc/UTC # Set timezone if needed (alpine image includes tzdata)
     restart: unless-stopped # Restart policy

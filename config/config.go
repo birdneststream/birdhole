@@ -17,6 +17,8 @@ type Config struct {
 	ListenAddr             string `toml:"ListenAddr"`
 	DefaultExpiry          string `toml:"DefaultExpiry"` // Parsed into duration later
 	BitcaskPath            string `toml:"BitcaskPath"`
+	FilesPath              string `toml:"FilesPath"`      // New: Path for storing actual files
+	ThumbnailsPath         string `toml:"ThumbnailsPath"` // New: Path for storing thumbnails
 	UploadKey              string `toml:"UploadKey"`
 	GalleryKey             string `toml:"GalleryKey"`
 	AdminKey               string `toml:"AdminKey"`
@@ -63,6 +65,8 @@ func Load(configPath string) error {
 		ListenAddr:             "0.0.0.0",
 		DefaultExpiry:          "24h",
 		BitcaskPath:            "./birdhole.db",
+		FilesPath:              "./files",      // Default files directory
+		ThumbnailsPath:         "./thumbnails", // Default thumbnails directory
 		MaxUploadSizeMB:        100,
 		BaseURL:                "/",
 		LogLevel:               "info",                              // Default log level
