@@ -2,7 +2,7 @@
   "name": "Birdhole",
   "short_name": "Birdhole",
   "description": "Simple temporary file sharing",
-  "start_url": "/gallery",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#282c34",
   "theme_color": "#21252b",

@@ -198,7 +198,8 @@ main {
 }
 
 /* Base gallery grid layout (Mobile First - 1 column) */
-#gallery-items {
+#gallery-items,
+.gallery-grid {
     display: grid;
     grid-template-columns: 1fr; 
     gap: 0; 
@@ -431,6 +432,21 @@ main {
     padding: 10px;
     text-align: center;
     color: #61afef;
+}
+
+/* Load more indicator */
+.load-more-indicator {
+    padding: 20px;
+    text-align: center;
+    color: #61afef;
+    font-style: italic;
+}
+
+#load-more-trigger {
+    min-height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 /* === Detail Page Enhancements === */
@@ -676,14 +692,16 @@ main {
 
 /* Apply 2 columns for screens wider than 480px */
 @media (min-width: 481px) {
-    #gallery-items {
+    #gallery-items,
+    .gallery-grid {
         grid-template-columns: repeat(2, 1fr);
     }
 }
 
 /* Apply auto-fill columns for screens wider than 768px */
 @media (min-width: 769px) {
-    #gallery-items {
+    #gallery-items,
+    .gallery-grid {
         grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
     }
 
@@ -882,4 +900,11 @@ main {
 
 .welcome-form button:hover {
     background-color: #529bcf;
+}
+
+/* Removed duplicate .gallery-grid definition - now unified above */
+
+/* Detail View Styles */
+.detail-view {
+    /* ... existing code ... */
 }

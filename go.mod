@@ -8,6 +8,8 @@ require (
 	github.com/disintegration/imaging v1.6.2
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/yuin/goldmark v1.7.10
+	golang.org/x/image v0.26.0
+	golang.org/x/time v0.11.0
 )
 
 require (
@@ -19,8 +21,6 @@ require (
 	github.com/plar/go-adaptive-radix-tree v1.0.4 // indirect
 	github.com/sirupsen/logrus v1.8.1 // indirect
 	golang.org/x/exp v0.0.0-20200228211341-fcea875c7e85 // indirect
-	golang.org/x/image v0.26.0 // indirect
 	golang.org/x/net v0.26.0 // indirect
 	golang.org/x/sys v0.21.0 // indirect
-	golang.org/x/time v0.11.0 // indirect
 )

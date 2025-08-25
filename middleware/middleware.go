@@ -3,6 +3,7 @@ package middleware
 import (
 	"birdhole/config"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -222,7 +223,20 @@ func (m *Middleware) Recovery(next http.Handler) http.Handler {
 					"method", r.Method,
 					"path", r.URL.Path,
 				)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+
+				// Return a JSON error response
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusInternalServerError)
+				response := struct {
+					Error string `json:"error"`
+				}{
+					Error: "Internal Server Error",
+				}
+				if jsonErr := json.NewEncoder(w).Encode(response); jsonErr != nil {
+					m.log.Error("Failed to encode panic recovery JSON response", "error", jsonErr)
+					// Fallback to plain text if JSON encoding fails for some reason
+					http.Error(w, `{"error":"Internal Server Error"}`, http.StatusInternalServerError)
+				}
 			}
 		}()
 		next.ServeHTTP(w, r)

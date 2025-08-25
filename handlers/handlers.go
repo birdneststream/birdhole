@@ -84,6 +84,30 @@ func New(store *storage.Storage, cfg *config.Config, logger *slog.Logger, tmpl *
 
 // --- Helper Functions ---
 
+// jsonError writes a JSON error response and logs the error.
+func jsonError(w http.ResponseWriter, logger *slog.Logger, message string, err error, statusCode int) {
+	logMsg := message
+	if err != nil {
+		// Add the actual error to the log message for detailed debugging
+		logMsg = fmt.Sprintf("%s: %v", message, err)
+	}
+	logger.Error(logMsg)
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(statusCode)
+	response := struct {
+		Error string `json:"error"`
+	}{
+		// Return the user-friendly message, not the detailed error
+		Error: message,
+	}
+	if encodeErr := json.NewEncoder(w).Encode(response); encodeErr != nil {
+		// If encoding fails, log it and fall back to a plain text error
+		logger.Error("Failed to encode JSON error response", "error", encodeErr)
+		// No need to write another header since it's already been written
+	}
+}
+
 func httpError(w http.ResponseWriter, logger *slog.Logger, message string, err error, statusCode int) {
 	logMsg := message
 	if err != nil {
@@ -124,7 +148,7 @@ func (h *Handlers) WelcomeHandler(w http.ResponseWriter, r *http.Request) {
 // UploadHandler handles file uploads.
 func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		jsonError(w, h.Log, "Method not allowed", nil, http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -134,15 +158,19 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	// Use MaxBytesReader to limit upload size
 	maxUploadBytes := int64(h.Config.MaxUploadSizeMB) * 1024 * 1024
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
-	err := r.ParseMultipartForm(maxUploadBytes)
+	
+	// Use smaller memory limit for multipart form to avoid memory issues
+	// Files over 10MB will be stored on disk temporarily
+	memoryLimit := int64(10 * 1024 * 1024) // 10 MB in memory, rest to disk
+	err := r.ParseMultipartForm(memoryLimit)
 	if err != nil {
-		httpError(w, logger, fmt.Sprintf("Failed to parse multipart form (max size %dMB)", h.Config.MaxUploadSizeMB), err, http.StatusBadRequest)
+		jsonError(w, logger, fmt.Sprintf("Failed to parse multipart form (max size %dMB)", h.Config.MaxUploadSizeMB), err, http.StatusBadRequest)
 		return
 	}
 
 	fileReader, fileHeader, err := r.FormFile("file")
 	if err != nil {
-		httpError(w, logger, "Failed to get file from form", err, http.StatusBadRequest)
+		jsonError(w, logger, "Failed to get file from form", err, http.StatusBadRequest)
 		return
 	}
 	defer fileReader.Close()
@@ -170,14 +198,14 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	contentBytes, err := io.ReadAll(fileReader)
 	if err != nil {
 		// Handle error reading file content before storage attempt
-		httpError(w, logger, "Failed to read file content", err, http.StatusInternalServerError)
+		jsonError(w, logger, "Failed to read file content", err, http.StatusInternalServerError)
 		return
 	}
 
 	// Generate unique filename with specified length
 	uniqueFilename, err := h.Storage.GenerateUniqueFilename(r.Context(), ext, urlLen)
 	if err != nil {
-		httpError(w, logger, "Failed to generate unique filename", err, http.StatusInternalServerError)
+		jsonError(w, logger, "Failed to generate unique filename", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -254,11 +282,10 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// --- End Process Custom Metadata ---
 
-	// --- Calculate Image Dimensions --- // ADDED
+	// --- Quick Image Dimensions (non-blocking) --- 
 	var width, height int
-	var compressedThumbBytes []byte // ADDED: Variable to hold compressed thumb
 	if strings.HasPrefix(mimeType, "image/") {
-		// First, try to get dimensions
+		// Only get dimensions quickly, defer thumbnail generation
 		imgConfig, _, err := image.DecodeConfig(bytes.NewReader(contentBytes))
 		if err != nil {
 			logger.Warn("Could not decode image config to get dimensions", "filename", originalFilename, "error", err)
@@ -266,39 +293,9 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 			width = imgConfig.Width
 			height = imgConfig.Height
 			logger.Debug("Calculated image dimensions", "width", width, "height", height)
-
-			// --- Generate and Compress Thumbnail --- ADDED
-			// Only proceed if dimensions were successfully decoded
-			img, format, decodeErr := image.Decode(bytes.NewReader(contentBytes)) // Decode fully
-			if decodeErr != nil {
-				// Log error decoding full image for thumbnail, but don't fail upload
-				logger.Warn("Could not decode full image for thumbnail generation", "filename", originalFilename, "error", decodeErr)
-			} else {
-				logger.Debug("Decoded full image for thumbnail generation", "format", format)
-				// Generate thumbnail (same size as before)
-				thumb := imaging.Thumbnail(img, 400, 300, imaging.Lanczos)
-
-				// Encode thumbnail as JPEG into a buffer
-				var thumbBuf bytes.Buffer
-				encodeErr := imaging.Encode(&thumbBuf, thumb, imaging.JPEG, imaging.JPEGQuality(85))
-				if encodeErr != nil {
-					logger.Warn("Failed to encode thumbnail to JPEG", "filename", originalFilename, "error", encodeErr)
-				} else {
-					// Compress the encoded thumbnail
-					var compressErr error
-					compressedThumbBytes, compressErr = storage.CompressContent(thumbBuf.Bytes())
-					if compressErr != nil {
-						logger.Warn("Failed to compress thumbnail content", "filename", originalFilename, "error", compressErr)
-						compressedThumbBytes = nil // Ensure it's nil if compression fails
-					} else {
-						logger.Debug("Successfully generated and compressed thumbnail", "compressed_size", len(compressedThumbBytes))
-					}
-				}
-			}
-			// --- End Generate and Compress Thumbnail ---
 		}
 	}
-	// --- End Calculate Image Dimensions & Thumbnail ---
+	// Thumbnail generation will be done in background after upload completes
 
 	fileInfo := file.Info{
 		Name:        uniqueFilename,
@@ -321,11 +318,16 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the file (passing contentBytes and optional compressedThumbBytes)
-	err = h.Storage.PutFile(r.Context(), uniqueFilename, fileInfo, contentBytes, compressedThumbBytes) // MODIFIED: Pass thumb bytes
+	// Store the file without thumbnail first (for immediate response)
+	err = h.Storage.PutFile(r.Context(), uniqueFilename, fileInfo, contentBytes, nil) // No thumbnail yet
 	if err != nil {
 		httpError(w, logger, "Failed to store file", err, http.StatusInternalServerError)
 		return
+	}
+	
+	// Generate thumbnail in background if it's an image
+	if strings.HasPrefix(mimeType, "image/") {
+		go h.generateThumbnailAsync(uniqueFilename, contentBytes, logger)
 	}
 
 	// Construct the base URL
@@ -382,6 +384,16 @@ func (h *Handlers) FileServingHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	
+	// Set cache headers for files
+	w.Header().Set("Cache-Control", "public, max-age=1800") // 30 minutes cache
+	w.Header().Set("ETag", fmt.Sprintf(`"%s"`, filename))
+	
+	// Check if client has cached version
+	if match := r.Header.Get("If-None-Match"); match == fmt.Sprintf(`"%s"`, filename) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 
 	storedObj, err := h.Storage.GetStoredObject(r.Context(), filename)
 	if err != nil {
@@ -393,18 +405,18 @@ func (h *Handlers) FileServingHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if storedObj.Metadata.Hidden && !isAdmin(r, h.Config) {
-		logger.Warn("Attempt to access hidden file without admin key")
-		http.NotFound(w, r) // Treat hidden files as not found for non-admins
-		return
+	// Hidden files are still accessible via direct URL
+	// They're only hidden from gallery listings for non-admins
+	if storedObj.Metadata.Hidden {
+		logger.Debug("Serving hidden file via direct URL", "filename", filename)
 	}
 
 	// Set headers
 	w.Header().Set("Content-Type", storedObj.Metadata.MimeType)
 	w.Header().Set("Content-Encoding", "gzip")
 	w.Header().Set("Content-Length", strconv.Itoa(len(storedObj.ContentGz)))
-	// Add cache headers if desired
-	// w.Header().Set("Cache-Control", "public, max-age=...")
+	// Set Cache-Control for served files (7 days browser, 7 days edge)
+	w.Header().Set("Cache-Control", "public, max-age=604800, s-maxage=604800") // UPDATED max-age
 
 	w.WriteHeader(http.StatusOK)
 	_, err = w.Write(storedObj.ContentGz)
@@ -422,7 +434,12 @@ type detailPageData struct {
 	Views           int               // Added Views
 	Metadata        map[string]string // Added Metadata map
 	ExpiresIn       string            // Added ExpiresIn string
-	// PanoramaScript  template.JS    // REMOVED - Script is now inline in template
+
+	// Fields to preserve gallery state for the back link
+	GalleryTag       string
+	GallerySort      string
+	GalleryQuery     string
+	GalleryShowTypes []string
 }
 
 // --- Helper for human-readable duration ---
@@ -465,6 +482,14 @@ func (h *Handlers) renderDetail(w http.ResponseWriter, r *http.Request, isPartia
 	// as AuthCheck middleware is not applied globally to detail views.
 	admin := key != "" && h.Config.AdminKey != "" && key == h.Config.AdminKey
 
+	// --- Parse Gallery Filter Parameters from URL ---
+	queryValues := r.URL.Query()
+	galleryTag := queryValues.Get("tag")
+	gallerySort := queryValues.Get("sort")
+	galleryQuery := queryValues.Get("q")
+	galleryShowTypes := queryValues["show_type"] // Get slice directly
+	// --- End Parse Gallery Filters ---
+
 	logger := h.Log.With("handler", "renderDetail", "filename", filename, "isAdmin", admin)
 
 	if !validFilenameRegex.MatchString(filename) {
@@ -484,10 +509,10 @@ func (h *Handlers) renderDetail(w http.ResponseWriter, r *http.Request, isPartia
 		return
 	}
 
-	if storedObj.Metadata.Hidden && !admin {
-		logger.Warn("Attempt to access hidden file without admin key")
-		http.NotFound(w, r)
-		return
+	// Hidden files are still accessible via direct URL
+	// They're only hidden from gallery listings for non-admins
+	if storedObj.Metadata.Hidden {
+		logger.Debug("Serving detail view for hidden file via direct URL", "filename", filename, "isAdmin", admin)
 	}
 
 	// --- Increment Unique View Count ---
@@ -543,14 +568,6 @@ func (h *Handlers) renderDetail(w http.ResponseWriter, r *http.Request, isPartia
 		}
 	}
 
-	// --- Panorama Script Generation REMOVED ---
-	/*
-		var panoramaScript template.JS = ""
-		if storedObj.Metadata.Panorama {
-			// ... (old script generation logic removed) ...
-		}
-	*/
-
 	data := detailPageData{
 		Info:            storedObj.Metadata, // file.Info struct itself
 		Key:             key,
@@ -559,7 +576,11 @@ func (h *Handlers) renderDetail(w http.ResponseWriter, r *http.Request, isPartia
 		Views:           storedObj.Metadata.Views,
 		Metadata:        storedObj.Metadata.Meta, // Corrected: Use the 'Meta' field from file.Info
 		ExpiresIn:       expiresInStr,
-		// PanoramaScript:  panoramaScript, // REMOVED
+		// Pass parsed gallery filters to template
+		GalleryTag:       galleryTag,
+		GallerySort:      gallerySort,
+		GalleryQuery:     galleryQuery,
+		GalleryShowTypes: galleryShowTypes,
 	}
 
 	templateName := "detail.html"
@@ -599,6 +620,16 @@ func (h *Handlers) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	
+	// Set cache headers for thumbnails
+	w.Header().Set("Cache-Control", "public, max-age=3600, immutable") // 1 hour cache
+	w.Header().Set("ETag", fmt.Sprintf(`"%s-thumb"`, filename))
+	
+	// Check if client has cached version
+	if match := r.Header.Get("If-None-Match"); match == fmt.Sprintf(`"%s-thumb"`, filename) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 
 	// --- NEW: Retrieve pre-generated thumbnail ---
 	compressedThumbData, err := h.Storage.GetThumbnail(r.Context(), filename)
@@ -619,12 +650,10 @@ func (h *Handlers) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// 2. Check admin access for hidden files (needed if GetStoredObject doesn't check)
-			// Re-check isAdmin status based on context key, as ThumbnailHandler might be public
-			if storedObj.Metadata.Hidden && !isAdmin(r, h.Config) { // Use isAdmin helper
-				logger.Warn("Attempt to access hidden file thumbnail fallback without admin key")
-				http.NotFound(w, r)
-				return
+			// 2. Hidden files are accessible via direct URL, including thumbnails
+			// They're only hidden from gallery listings for non-admins
+			if storedObj.Metadata.Hidden {
+				logger.Debug("Generating thumbnail for hidden file via fallback", "filename", filename)
 			}
 
 			// 3. Check if it's an image
@@ -679,7 +708,8 @@ func (h *Handlers) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 			// 10. Serve the *generated* (uncompressed) thumbnail
 			w.Header().Set("Content-Type", "image/jpeg")
 			w.Header().Set("Content-Length", strconv.Itoa(len(generatedThumbBytes)))
-			w.Header().Set("Cache-Control", "public, max-age=86400") // Still cache the generated one
+			// Use shorter cache for fallback-generated to encourage browser revalidation sooner
+			w.Header().Set("Cache-Control", "public, max-age=3600, s-maxage=86400")
 			w.WriteHeader(http.StatusOK)
 			_, writeErr := w.Write(generatedThumbBytes)
 			if writeErr != nil {
@@ -706,7 +736,8 @@ func (h *Handlers) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 	// Serve the decompressed thumbnail
 	w.Header().Set("Content-Type", "image/jpeg") // Assuming JPEG was used during generation
 	w.Header().Set("Content-Length", strconv.Itoa(len(decompressedThumb)))
-	w.Header().Set("Cache-Control", "public, max-age=86400") // Cache for 1 day
+	// Set Cache-Control for successfully retrieved stored thumbnails (7 days browser, 7 days edge)
+	w.Header().Set("Cache-Control", "public, max-age=604800, s-maxage=604800") // UPDATED max-age
 	w.WriteHeader(http.StatusOK)
 	_, err = w.Write(decompressedThumb)
 	if err != nil {
@@ -717,47 +748,38 @@ func (h *Handlers) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteHandler handles file deletion.
 func (h *Handlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
+	logger := h.Log.With("handler", "DeleteHandler")
+
 	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		jsonError(w, logger, "Method not allowed", nil, http.StatusMethodNotAllowed)
 		return
 	}
 
-	filename := filepath.Base(r.URL.Path)
-	logger := h.Log.With("handler", "DeleteHandler", "filename", filename)
+	// isAdmin check is now implicitly handled by the AuthCheck middleware,
+	// so we don't need to perform the check here again. If the middleware
+	// fails, it won't even reach this handler.
 
-	// --- Authorization Check ---
-	if !isAdmin(r, h.Config) {
-		logger.Warn("Unauthorized attempt to delete file")
-		// Note: Middleware should already block this, but belt-and-suspenders.
-		httpError(w, logger, "Forbidden", nil, http.StatusForbidden)
-		return
-	}
-	// --- End Authorization Check ---
-
-	// Validate filename format
+	filename := r.PathValue("filename")
 	if !validFilenameRegex.MatchString(filename) {
-		logger.Warn("Invalid filename format requested for deletion")
-		// Return 404 or potentially 400 Bad Request? 404 seems reasonable.
-		http.NotFound(w, r)
+		jsonError(w, logger, "Invalid filename format", nil, http.StatusBadRequest)
 		return
 	}
 
+	logger.Info("Attempting to delete file", "filename", filename)
+
+	// Delete file and its metadata
 	err := h.Storage.DeleteFile(r.Context(), filename)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			// Already deleted or never existed - considered success for idempotent DELETE
-			logger.Warn("Attempted to delete non-existent file", "error", err)
-			w.WriteHeader(http.StatusOK) // Or http.StatusNoContent
+			jsonError(w, logger, "File not found", err, http.StatusNotFound)
 		} else {
-			httpError(w, logger, "Failed to delete file", err, http.StatusInternalServerError)
+			jsonError(w, logger, "Failed to delete file", err, http.StatusInternalServerError)
 		}
 		return
 	}
 
-	logger.Info("File deleted successfully")
-	w.WriteHeader(http.StatusOK) // Or http.StatusNoContent
-	// Optionally return something if not using hx-swap="outerHTML"
-	// fmt.Fprint(w, "Deleted")
+	logger.Info("File and metadata deleted successfully", "filename", filename)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // StaticHandler serves static files.
@@ -776,4 +798,48 @@ func truncateString(s string, length int) string {
 		return s[:idx] + "..."
 	}
 	return s[:length] + "..."
+}
+
+// generateThumbnailAsync generates thumbnails in the background
+func (h *Handlers) generateThumbnailAsync(filename string, contentBytes []byte, logger *slog.Logger) {
+	ctx := context.Background()
+	log := logger.With("function", "generateThumbnailAsync", "filename", filename)
+	
+	log.Debug("Starting background thumbnail generation")
+	
+	// Decode the image
+	img, format, decodeErr := image.Decode(bytes.NewReader(contentBytes))
+	if decodeErr != nil {
+		log.Warn("Could not decode image for thumbnail generation", "error", decodeErr)
+		return
+	}
+	
+	log.Debug("Decoded image for thumbnail generation", "format", format)
+	
+	// Generate thumbnail
+	thumb := imaging.Thumbnail(img, 400, 300, imaging.Lanczos)
+	
+	// Encode thumbnail as JPEG
+	var thumbBuf bytes.Buffer
+	encodeErr := imaging.Encode(&thumbBuf, thumb, imaging.JPEG, imaging.JPEGQuality(85))
+	if encodeErr != nil {
+		log.Warn("Failed to encode thumbnail to JPEG", "error", encodeErr)
+		return
+	}
+	
+	// Compress the encoded thumbnail
+	compressedThumbBytes, compressErr := storage.CompressContent(thumbBuf.Bytes())
+	if compressErr != nil {
+		log.Warn("Failed to compress thumbnail content", "error", compressErr)
+		return
+	}
+	
+	// Store thumbnail separately
+	err := h.Storage.PutThumbnail(ctx, filename, compressedThumbBytes)
+	if err != nil {
+		log.Warn("Failed to store thumbnail", "error", err)
+		return
+	}
+	
+	log.Debug("Successfully generated and stored thumbnail", "compressed_size", len(compressedThumbBytes))
 }

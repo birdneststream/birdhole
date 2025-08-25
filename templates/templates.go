@@ -3,6 +3,7 @@ package templates
 import (
 	"birdhole/file"
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -26,9 +27,11 @@ var (
 		"formatBytes": formatBytes,
 		"joinTags":    joinTags,
 		// "truncate":    truncateString, // Removed - Helper exists in handlers pkg, not used directly in tmpl?
-		"addQuery": addQueryParam,
-		"default":  defaultFunc,
-		"isInList": isInList,
+		"addQuery":         addQueryParam,
+		"default":          defaultFunc,
+		"isInList":         isInList,
+		"buildQueryString": buildQueryString,
+		"dict":             dictFunc,
 	}
 )
 
@@ -133,6 +136,46 @@ func isInList(item string, list []string) bool {
 	// 	}
 	// }
 	// return false
+}
+
+// buildQueryString creates a URL query string from given parameters.
+// Returns template.URL to prevent double-encoding in HTML attributes.
+func buildQueryString(params map[string]interface{}) template.URL {
+	vals := url.Values{}
+	for key, value := range params {
+		switch v := value.(type) {
+		case string:
+			if v != "" {
+				vals.Set(key, v)
+			}
+		case []string:
+			// Add each non-empty string in the slice
+			for _, item := range v {
+				if item != "" {
+					vals.Add(key, item)
+				}
+			}
+			// Add other types like int if needed
+		}
+	}
+	// Encode and cast the result to template.URL
+	return template.URL(vals.Encode())
+}
+
+// dictFunc creates a map from a list of key-value pairs.
+func dictFunc(values ...interface{}) (map[string]interface{}, error) {
+	if len(values)%2 != 0 {
+		return nil, errors.New("dict requires an even number of arguments (key-value pairs)")
+	}
+	m := make(map[string]interface{}, len(values)/2)
+	for i := 0; i < len(values); i += 2 {
+		key, ok := values[i].(string)
+		if !ok {
+			return nil, errors.New("dict keys must be strings")
+		}
+		m[key] = values[i+1]
+	}
+	return m, nil
 }
 
 // FileInfoWrapper wraps FileInfo to potentially add extra fields for templates.

@@ -23,7 +23,7 @@
     {{ block "gallery-content" . }}
     <div id="gallery-content" 
          hx-get="/gallery?partial=true{{if .CurrentKey}}&key={{.CurrentKey}}{{end}}" {{/* Poll full gallery with partial flag */}}
-         hx-include="[name='key'], [name='tag'], [name='mime'], [name='sort'], [name='q']" {{/* Include current filters */}}
+         hx-include="[name='key'], [name='tag'], [name='show_type'], [name='sort'], [name='q']" {{/* UPDATED: Include show_type checkboxes */}}
          hx-trigger="every 60s" 
          hx-swap="outerHTML" {{/* Swap the whole content div */}}
          hx-indicator=".htmx-indicator"> 
@@ -38,9 +38,9 @@
                             <span>Filter by Type:</span> {{/* Renamed Label */}}
                             <div class="checkbox-group" 
                                  hx-get="/gallery/items" 
-                                 hx-include="[name='key'], [name='tag'], [name='sort'], [name='q'], [name='show_type']" {{/* Removed hide_type */}} 
+                                 hx-include="[name='key'], [name='tag'], #sortOrder, #searchQuery, [name='show_type']" {{/* Revised include */}} 
                                  hx-target="#gallery-items" 
-                                 hx-swap="outerHTML:#gallery-items:transition:true"
+                                 hx-swap="innerHTML"
                                  hx-trigger="change from:input"
                                  hx-push-url="true"
                                  hx-indicator=".htmx-indicator">
@@ -67,7 +67,7 @@
                                     hx-get="/gallery/items" 
                                     hx-include="[name='key'], [name='tag'], [name='show_type'], [name='q']" 
                                     hx-target="#gallery-items" 
-                                    hx-swap="outerHTML:#gallery-items:transition:true"
+                                    hx-swap="innerHTML"
                                     hx-trigger="change"
                                     hx-push-url="true"
                                     hx-indicator=".htmx-indicator">
@@ -85,7 +85,7 @@
                                    hx-get="/gallery/items" 
                                    hx-include="[name='key'], [name='tag'], [name='show_type'], [name='sort']" 
                                    hx-target="#gallery-items" 
-                                   hx-swap="outerHTML:#gallery-items:transition:true"
+                                   hx-swap="innerHTML"
                                    hx-trigger="keyup changed delay:500ms, search" 
                                    hx-push-url="true"
                                    hx-indicator=".htmx-indicator">
@@ -105,7 +105,7 @@
                            hx-vals='{"tag": ""}' 
                            hx-target="#gallery-items" 
                            hx-push-url="true" 
-                           hx-swap="outerHTML:#gallery-items:transition:true" 
+                           hx-swap="innerHTML" 
                            hx-indicator=".htmx-indicator" 
                            {{ if eq .ActiveTag "" }}class="active"{{ end }}>All</a>
                         {{ range .UniqueTags }}
@@ -116,7 +116,7 @@
                             hx-vals='{"tag": "{{ . }}"}' 
                             hx-target="#gallery-items" 
                             hx-push-url="true" 
-                            hx-swap="outerHTML:#gallery-items:transition:true" 
+                            hx-swap="innerHTML" 
                             hx-indicator=".htmx-indicator" 
                             {{ if eq $.ActiveTag . }}class="active"{{ end }}>#{{ . }}</a>
                         {{ end }}
@@ -125,29 +125,39 @@
                 </div> {{/* End Right Panel */}}
             </div>
 
-            {{/* Hidden inputs to store current filter state */}}
-            {{/* We now rely on hx-include to get values directly from inputs/selects */}}
-            {{/* Might need hidden inputs if state needs to be preserved across full page loads differently */}}
-            {{/* <input type="hidden" name="tag" value="{{ .ActiveTag }}"> */}}
-            {{/* <input type="hidden" name="mime" value="{{ .ActiveMime }}"> */}} {{/* Replaced by show/hide */}}
-            {{/* <input type="hidden" name="sort" value="{{ .SortOrder | default "new" }}"> */}}
-            {{/* <input type="hidden" name="q" value="{{ .SearchQuery }}"> */}}
+            {{/* Container for hidden tag input, target for OOB swap */}}
+            <div id="active-tag-input-container">
+                {{ template "active_tag_input_oob.html" . }} {{/* Render initial value */}}
+            </div>
+
+            {{/* Hidden inputs */}}
+            {{/* Tag input is now handled above */}}
             <input type="hidden" name="key" value="{{ .CurrentKey }}">
 
         </nav>
 
         <main>
-            {{/* Loading indicator: Moved outside swapped area? Or keep inside? Let's keep inside for now */}}
+            {{/* Loading indicator */}}
             <div class="htmx-indicator loading-indicator">Loading gallery items...</div> 
-
-            <div id="gallery-items" 
-                 {{/* hx-get removed - polling is now on #gallery-content */}} 
-                 {{/* hx-trigger removed */}}
-                 {{/* hx-swap removed */}}
-                 >
-                {{/* Render initial items directly */}}
-                {{ template "gallery_items.html" . }}
+            
+            {{/* Progressive loading container */}}
+            <div id="gallery-progressive-container">
+                {{/* Initial batch of items will load here */}}
+                {{ template "gallery_items_initial.html" . }}
+                
+                {{/* Load more trigger - hidden initially if all items loaded */}}
+                <div id="load-more-trigger" 
+                     hx-get="/gallery/load-more" 
+                     hx-include="[name='key'], [name='tag'], [name='show_type'], #sortOrder, #searchQuery"
+                     hx-vals='{"offset": "20"}'
+                     hx-target="#gallery-progressive-container" 
+                     hx-swap="beforeend"
+                     hx-trigger="intersect once"
+                     style="{{ if lt (len .Files) 20 }}display: none;{{ end }}">
+                    <div class="load-more-indicator">Loading more items...</div>
+                </div>
             </div>
+
         </main>
     </div> {{/* End #gallery-content */}}
     {{ end }} {{/* End block "gallery-content" */}}
@@ -155,21 +165,86 @@
 </body>
 </html>
 
+{{ define "gallery_items_initial.html" }}
+<div id="gallery-items" class="gallery-grid">
+    {{ if not .Files }}
+        <p>No files found.</p>
+    {{ else }}
+        {{/* Load first 20 items initially */}}
+        {{ range $index, $file := .Files }}
+            {{ if lt $index 20 }}
+                {{/* Prepare map for query string builder */}}
+                {{ $galleryParams := dict 
+                    "tag" $.ActiveTag 
+                    "sort" $.SortOrder 
+                    "q" $.SearchQuery 
+                    "show_type" $.ActiveShowMimes 
+                }}
+                {{ $queryString := buildQueryString $galleryParams }}
+                <div class="gallery-item">
+                    {{/* $queryString is now type template.URL, no filter needed */}}
+                    <a href="/detail/{{ $file.Name }}?key={{ $.CurrentKey }}{{ if $queryString }}&{{ $queryString }}{{ end }}">
+                        {{ if $file.Info.IsText }}
+                            <div class="gallery-item-text-snippet">{{ $file.Snippet | default "(Text file)" }}</div>
+                        {{ else if eq (printf "%.5s" $file.MimeType) "image" }}
+                            <img src="/thumbnail/{{ $file.Name }}" alt="{{ $file.Description }}" loading="lazy">
+                        {{ else if eq (printf "%.5s" $file.MimeType) "video" }}
+                            <video muted loop autoplay playsinline src="/{{ $file.Name }}" title="{{ $file.Name }}" loading="lazy" preload="metadata"></video>
+                        {{ else if eq (printf "%.5s" $file.MimeType) "audio" }}
+                             <span class="gallery-item-icon">&#127925;</span>
+                        {{ else }}
+                            <span class="gallery-item-icon">&#128196;</span>
+                        {{ end }}
+                        
+                        <div class="gallery-item-details">
+                            <p title="{{ $file.Name }}"><strong>File:</strong> {{ $file.Name }}</p>
+                            <p><strong>Size:</strong> {{ formatBytes $file.Size }}</p>
+                            {{ if $file.Tags }}
+                            <p title="{{ range $i, $tag := $file.Tags }}{{ if $i }} {{ end }}#{{ $tag }}{{ end }}"><strong>Tags:</strong> {{ range $i, $tag := $file.Tags }}{{ if $i }}, {{ end }}#{{ $tag }}{{ end }}</p>
+                            {{ end }}
+                            {{ if $file.Description }}
+                            <p title="{{ $file.Description }}"><strong>Desc:</strong> {{ $file.Description }}</p>
+                            {{ end }}
+                        </div>
+                    </a>
+                    {{ if $.IsAdmin }}
+                        <button class="gallery-item-delete-button" 
+                                hx-delete="/{{ $file.Name }}?key={{ $.CurrentKey }}" 
+                                hx-confirm="Are you sure you want to delete {{ $file.Name }}?" 
+                                hx-target="closest .gallery-item" 
+                                hx-swap="outerHTML">X</button>
+                    {{ end }}
+                </div>
+            {{ end }}
+        {{ end }}
+    {{ end }}
+</div>
+{{ end }}
+
 {{ define "gallery_items.html" }}
     {{ if not .Files }}
         <p>No files found.</p>
     {{ else }}
         {{ range .Files }}
+        {{/* Prepare map for query string builder */}}
+        {{ $galleryParams := dict 
+            "tag" $.ActiveTag 
+            "sort" $.SortOrder 
+            "q" $.SearchQuery 
+            "show_type" $.ActiveShowMimes 
+        }}
+        {{ $queryString := buildQueryString $galleryParams }}
         <div class="gallery-item">
-            <a href="/detail/{{ .Name }}?key={{ $.CurrentKey }}">
-                {{ if eq (printf "%.5s" .MimeType) "image" }}
-                    <img src="/thumbnail/{{ .Name }}" alt="{{ .Description }}">
+            {{/* $queryString is now type template.URL, no filter needed */}}
+            <a href="/detail/{{ .Name }}?key={{ $.CurrentKey }}{{ if $queryString }}&{{ $queryString }}{{ end }}">
+                {{ if .Info.IsText }}
+                    <div class="gallery-item-text-snippet">{{ .Snippet | default "(Text file)" }}</div>
+                {{ else if eq (printf "%.5s" .MimeType) "image" }}
+                    <img src="/thumbnail/{{ .Name }}" alt="{{ .Description }}" loading="lazy">
                 {{ else if eq (printf "%.5s" .MimeType) "video" }}
-                    <video muted loop autoplay playsinline src="/{{ .Name }}" title="{{ .Name }}"></video>
+                    <video muted loop autoplay playsinline src="/{{ .Name }}" title="{{ .Name }}" loading="lazy" preload="metadata"></video>
                 {{ else if eq (printf "%.5s" .MimeType) "audio" }}
                      <span class="gallery-item-icon">&#127925;</span>
-                {{ else if eq (printf "%.4s" .MimeType) "text" }}
-                     <div class="gallery-item-text-snippet">{{ .Snippet | default "(Text file)" }}</div>
                 {{ else }}
                     <span class="gallery-item-icon">&#128196;</span>
                 {{ end }}
@@ -206,7 +281,7 @@
        hx-vals='{"tag": ""}' 
        hx-target="#gallery-items" 
        hx-push-url="true" 
-       hx-swap="outerHTML:#gallery-items:transition:true" 
+       hx-swap="innerHTML" 
        hx-indicator=".htmx-indicator" 
        {{ if eq .ActiveTag "" }}class="active"{{ end }}>All</a>
     {{ range .UniqueTags }}
@@ -217,9 +292,16 @@
         hx-vals='{"tag": "{{ . }}"}' 
         hx-target="#gallery-items" 
         hx-push-url="true" 
-        hx-swap="outerHTML:#gallery-items:transition:true" 
+        hx-swap="innerHTML" 
         hx-indicator=".htmx-indicator" 
         {{ if eq $.ActiveTag . }}class="active"{{ end }}>#{{ . }}</a>
     {{ end }}
+</div>
+{{ end }}
+
+{{/* NEW: Define block for OOB swap of active tag hidden input */}}
+{{ define "active_tag_input_oob.html" }}
+<div id="active-tag-input-container" hx-swap-oob="true"> {{/* Target for OOB swap */}}
+    <input type="hidden" name="tag" value="{{ .ActiveTag }}">
 </div>
 {{ end }} 

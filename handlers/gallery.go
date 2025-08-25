@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	// Added for os.ErrNotExist
 	// Go 1.21+ for slices.Contains
@@ -96,6 +97,12 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 	uniqueMimeTypes := make(map[string]struct{}) // Still collect all unique types for UI
 
 	for _, fileInfo := range allFilesInfo {
+		// Time-based filter: Only show files younger than 24 hours, unless an admin is viewing.
+		isRecent := time.Unix(fileInfo.Timestamp, 0).After(time.Now().Add(-24 * time.Hour))
+		if !isRecent && !isAdmin {
+			continue
+		}
+
 		isVisible := !fileInfo.Hidden || isAdmin
 		if isVisible {
 			// Collect unique tags and mime types from all visible files for the UI controls
@@ -171,7 +178,7 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 					log.Error("Failed to decompress content for snippet generation", "filename", fileInfo.Name, "error", decompErr)
 					wrapper.Snippet = "(Error reading content)"
 				} else {
-					wrapper.Snippet = truncateString(string(rawContent), 150)
+					wrapper.Snippet = truncateString(string(rawContent), 300)
 					if wrapper.Snippet == "" {
 						wrapper.Snippet = "(Empty text file)"
 					}
@@ -229,6 +236,88 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 	// --- End Template Data ---
 
 	return data, nil // Return the prepared data and no error
+}
+
+// LoadMoreItemsHandler handles pagination for gallery items
+func (h *Handlers) LoadMoreItemsHandler(w http.ResponseWriter, r *http.Request) {
+	log := h.Log.With("handler", "LoadMoreItemsHandler")
+	
+	// Get gallery data
+	data, err := h.prepareGalleryData(r)
+	if err != nil {
+		if errors.Is(err, ErrInvalidAccessKey) {
+			http.NotFound(w, r)
+		} else {
+			log.Error("Failed to prepare gallery data", "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, `<div class="error-message">Error loading more items.</div>`)
+		}
+		return
+	}
+	
+	// Get offset from query params
+	offsetStr := r.URL.Query().Get("offset")
+	offset := 0
+	if offsetStr != "" {
+		if parsedOffset, parseErr := strconv.Atoi(offsetStr); parseErr == nil {
+			offset = parsedOffset
+		}
+	}
+	
+	files, ok := data["Files"].([]templates.FileInfoWrapper)
+	if !ok {
+		fmt.Fprintf(w, `<div class="error-message">No more items to load.</div>`)
+		return
+	}
+	
+	// Slice files based on offset
+	pageSize := 20
+	start := offset
+	end := offset + pageSize
+	
+	if start >= len(files) {
+		// No more items
+		return
+	}
+	
+	if end > len(files) {
+		end = len(files)
+	}
+	
+	pagedFiles := files[start:end]
+	data["Files"] = pagedFiles
+	
+	// Set content type
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	
+	// Render just the gallery items for this batch
+	for _, file := range pagedFiles {
+		// Render a basic item
+		fmt.Fprintf(w, `
+		<div class="gallery-item">
+			<a href="/detail/%s?key=%s">
+				<img src="/thumbnail/%s" alt="%s" loading="lazy">
+				<div class="gallery-item-details">
+					<p title="%s"><strong>File:</strong> %s</p>
+				</div>
+			</a>
+		</div>`, file.Name, data["CurrentKey"], file.Name, file.Description, file.Name, file.Name)
+	}
+	
+	// Add new load-more trigger if there are more items
+	if end < len(files) {
+		newOffset := end
+		fmt.Fprintf(w, `
+		<div id="load-more-trigger" 
+			 hx-get="/gallery/load-more" 
+			 hx-include="[name='key'], [name='tag'], [name='show_type'], #sortOrder, #searchQuery"
+			 hx-vals='{"offset": "%d"}'
+			 hx-target="#gallery-progressive-container" 
+			 hx-swap="beforeend"
+			 hx-trigger="intersect once">
+			<div class="load-more-indicator">Loading more items...</div>
+		</div>`, newOffset)
+	}
 }
 
 // renderGallery handles both the full page load and the HTMX partial updates.
@@ -289,6 +378,9 @@ func (h *Handlers) renderGallery(w http.ResponseWriter, r *http.Request, isParti
 	}
 
 	// --- Render Template ---
+	// Set content type to ensure proper rendering
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	
 	log.Info("Rendering gallery template", "template_target", templateName, "item_count", itemCount)
 	err = h.Tmpl.ExecuteTemplate(w, templateName, data)
 	if err != nil {
@@ -372,11 +464,19 @@ func (h *Handlers) GalleryItemsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Render Out-of-Band tag links first
 	log.Debug("Rendering OOB tag links")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	err = h.Tmpl.ExecuteTemplate(w, "tag_links_oob.html", data)
 	if err != nil {
 		// Log error, but continue to attempt rendering items
 		log.Error("Failed to execute tag_links_oob.html template", "error", err)
-		// Don't return here, maybe items will still render
+	}
+
+	// 2b. Render Out-of-Band active tag input
+	log.Debug("Rendering OOB active tag input")
+	err = h.Tmpl.ExecuteTemplate(w, "active_tag_input_oob.html", data)
+	if err != nil {
+		// Log error, but continue to attempt rendering items
+		log.Error("Failed to execute active_tag_input_oob.html template", "error", err)
 	}
 
 	// 3. Render main gallery items block

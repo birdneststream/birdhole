@@ -24,11 +24,17 @@
 </head>
 <body>
     <div class="detail-header">
-        {{/* Only show Back to Gallery link if a key was provided for the detail view */}}
-        {{ if .Key }}
-            <a href="/gallery?key={{ .Key }}" class="back-link">&larr; Back to Gallery</a>
-        {{ end }}
-        <h2>{{ .Info.Name }}</h2>
+        {{/* Prepare map for back link query string */}}
+        {{ $galleryParams := dict 
+            "tag" .GalleryTag 
+            "sort" .GallerySort 
+            "q" .GalleryQuery 
+            "show_type" .GalleryShowTypes 
+        }}
+        {{ $queryString := buildQueryString $galleryParams }}
+        <a href="/gallery?key={{ .Key }}{{ if $queryString }}&{{ $queryString }}{{ end }}" class="back-link">&larr; Back to Gallery</a>
+        
+        <h2 title="{{ .Info.Name }}">{{ .Info.Name }}</h2>
         {{ if .Info.Description }}<p class="detail-description">{{ .Info.Description }}</p>{{ end }}
         {{ if .Info.Message }}<p class="detail-message">{{ .Info.Message }}</p>{{ end }}
     </div>

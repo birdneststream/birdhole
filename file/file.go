@@ -33,6 +33,11 @@ func (i *Info) GetExtension() string {
 	return strings.ToLower(filepath.Ext(i.Name))
 }
 
+// IsText checks if the MimeType is text-based.
+func (i *Info) IsText() bool {
+	return strings.HasPrefix(i.MimeType, "text/")
+}
+
 // IsExpired checks if the file has expired based on KeyExpiry
 func (i *Info) IsExpired() bool {
 	// Handle potential zero expiry (never expires)

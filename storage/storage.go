@@ -158,8 +158,8 @@ func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, 
 
 	// Compress content (original file)
 	var compressedBuf bytes.Buffer
-	// Use BestCompression for potentially smaller files
-	gzWriter, err := gzip.NewWriterLevel(&compressedBuf, gzip.BestCompression)
+	// Use DefaultCompression as a better balance between speed and size
+	gzWriter, err := gzip.NewWriterLevel(&compressedBuf, gzip.DefaultCompression)
 	if err != nil {
 		return fmt.Errorf("failed to create gzip writer for content: %w", err)
 	}
@@ -447,7 +447,10 @@ func (s *Storage) GetAllFilesInfo(ctx context.Context) ([]file.Info, error) {
 	s.log.Debug("GetAllFilesInfo: Scanning for keys with prefix", "prefix", metaPrefix)
 	var filesInfo []file.Info
 
-	s.mu.RLock() // Lock for the duration of the scan
+	// Use a shorter lock duration and release between operations
+	s.mu.RLock()
+	defer s.mu.RUnlock() // Ensure unlock happens
+	
 	err := s.db.Scan([]byte(metaPrefix), func(key []byte) error {
 		// Check context cancellation within the loop
 		select {
@@ -478,7 +481,7 @@ func (s *Storage) GetAllFilesInfo(ctx context.Context) ([]file.Info, error) {
 		filesInfo = append(filesInfo, info)
 		return nil // Continue scan
 	})
-	s.mu.RUnlock() // Unlock after scan finishes or errors
+	// Note: Unlock is handled by defer above
 
 	if err != nil {
 		// This captures errors from the Get/Unmarshal inside the scan or context cancellation
@@ -559,7 +562,8 @@ func (s *Storage) CleanupExpired(ctx context.Context) (int, error) {
 	var keysToDelete [][][]byte
 	var filenamesToDelete []string
 
-	s.mu.RLock() // Lock for the duration of the scan
+	// Use read lock only for scan
+	s.mu.RLock()
 	scanErr := s.db.Scan([]byte(metaPrefix), func(key []byte) error {
 		// Check context cancellation
 		select {
@@ -591,7 +595,7 @@ func (s *Storage) CleanupExpired(ctx context.Context) (int, error) {
 		}
 		return nil // Continue scan
 	})
-	s.mu.RUnlock() // Unlock after scan
+	s.mu.RUnlock() // Unlock after scan completes
 
 	if scanErr != nil {
 		s.log.Error("Error during metadata scan in CleanupExpired", "error", scanErr)
@@ -637,6 +641,20 @@ func (s *Storage) CleanupExpired(ctx context.Context) (int, error) {
 			deletedCount++
 			s.log.Info("CleanupExpired: Deleted expired file", "filename", filename)
 		}
+	}
+
+	// After deleting keys, merge the database to reclaim space if any files were deleted.
+	if deletedCount > 0 {
+		s.log.Info("CleanupExpired: Merging database to reclaim space", "deleted_count", deletedCount)
+		s.mu.Lock()
+		err := s.db.Merge()
+		s.mu.Unlock()
+		if err != nil {
+			s.log.Error("CleanupExpired: Failed to merge database", "error", err)
+			// We return the count of deleted files, but also the error from merge
+			return deletedCount, fmt.Errorf("failed to merge database after cleanup: %w", err)
+		}
+		s.log.Info("CleanupExpired: Database merge completed successfully")
 	}
 
 	s.log.Info("Finished expired file cleanup run", "deleted_count", deletedCount)
