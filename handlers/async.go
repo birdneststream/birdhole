@@ -1,9 +1,6 @@
 package handlers
 
 import (
-	"birdhole/file"
-	"birdhole/storage"
-	"birdhole/templates"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -21,6 +18,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"birdhole/file"
+	"birdhole/storage"
+	"birdhole/templates"
 
 	"github.com/disintegration/imaging"
 	_ "golang.org/x/image/webp"

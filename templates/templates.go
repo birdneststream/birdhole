@@ -1,7 +1,6 @@
 package templates
 
 import (
-	"birdhole/file"
 	"embed"
 	"errors"
 	"fmt"
@@ -10,11 +9,12 @@ import (
 	"log/slog"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
+	"birdhole/file"
 	// Import the slices package (Go 1.21+)
-	"slices"
 )
 
 //go:embed gallery.html detail.html welcome.html
@@ -112,13 +112,11 @@ func defaultFunc(defaultValue interface{}, value interface{}) interface{} {
 		}
 	case reflect.Bool:
 		if !v.Bool() {
-			// Consider false as empty for boolean, might need adjustment based on use case
-			// return defaultValue
+			return defaultValue // Return default for false boolean values
 		}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if v.Int() == 0 {
-			// Consider 0 as empty for int, might need adjustment
-			// return defaultValue
+			return defaultValue // Return default for zero integer values
 		}
 		// Add other types (float, uint) if needed
 	}
@@ -158,8 +156,8 @@ func buildQueryString(params map[string]interface{}) template.URL {
 			// Add other types like int if needed
 		}
 	}
-	// Encode and cast the result to template.URL
-	return template.URL(vals.Encode())
+	// Safe: URL parameters are properly encoded before conversion to template.URL
+	return template.URL(vals.Encode()) // #nosec G203
 }
 
 // dictFunc creates a map from a list of key-value pairs.

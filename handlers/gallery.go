@@ -16,7 +16,6 @@ import (
 
 	// Add imports for markdown, image processing etc. when needed
 
-	"birdhole/storage"
 	"birdhole/templates"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -173,15 +172,11 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 				log.Error("Failed to get stored object for snippet generation", "filename", fileInfo.Name, "error", getErr)
 				wrapper.Snippet = "(Error loading content)"
 			} else {
-				rawContent, decompErr := storage.DecompressContent(storedObj.ContentGz)
-				if decompErr != nil {
-					log.Error("Failed to decompress content for snippet generation", "filename", fileInfo.Name, "error", decompErr)
-					wrapper.Snippet = "(Error reading content)"
-				} else {
-					wrapper.Snippet = truncateString(string(rawContent), 300)
-					if wrapper.Snippet == "" {
-						wrapper.Snippet = "(Empty text file)"
-					}
+				// ContentGz is now uncompressed content from filesystem
+				rawContent := storedObj.ContentGz
+				wrapper.Snippet = truncateString(string(rawContent), 300)
+				if wrapper.Snippet == "" {
+					wrapper.Snippet = "(Empty text file)"
 				}
 			}
 		}

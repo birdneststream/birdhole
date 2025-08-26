@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"birdhole/config"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,14 +12,18 @@ import (
 	"sync"
 	"time"
 
+	"birdhole/config"
+
 	"golang.org/x/time/rate"
 )
 
 // Context keys
 type contextKey string
 
-const AuthKeyContextKey = contextKey("authKey")
-const ClientIPContextKey = contextKey("clientIP")
+const (
+	AuthKeyContextKey  = contextKey("authKey")
+	ClientIPContextKey = contextKey("clientIP")
+)
 
 // Middleware holds dependencies for middleware handlers.
 type Middleware struct {

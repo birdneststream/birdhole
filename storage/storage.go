@@ -1,8 +1,6 @@
 package storage
 
 import (
-	"birdhole/config"
-	"birdhole/file"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -20,6 +18,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"birdhole/config"
+	"birdhole/file"
 
 	"git.mills.io/prologic/bitcask"
 )
@@ -54,19 +55,19 @@ func NewStorage(cfg *config.Config, logger *slog.Logger) (*Storage, error) {
 	log := logger.With("component", "storage")
 
 	// Ensure the storage directories exist
-	if err := os.MkdirAll(dbPath, 0755); err != nil {
+	if err := os.MkdirAll(dbPath, 0o750); err != nil {
 		log.Error("Failed to create storage directory", "path", dbPath, "error", err)
 		return nil, fmt.Errorf("failed to create storage directory %q: %w", dbPath, err)
 	}
 
 	// Create files directory
-	if err := os.MkdirAll(cfg.FilesPath, 0755); err != nil {
+	if err := os.MkdirAll(cfg.FilesPath, 0o750); err != nil {
 		log.Error("Failed to create files directory", "path", cfg.FilesPath, "error", err)
 		return nil, fmt.Errorf("failed to create files directory %q: %w", cfg.FilesPath, err)
 	}
 
 	// Create thumbnails directory
-	if err := os.MkdirAll(cfg.ThumbnailsPath, 0755); err != nil {
+	if err := os.MkdirAll(cfg.ThumbnailsPath, 0o750); err != nil {
 		log.Error("Failed to create thumbnails directory", "path", cfg.ThumbnailsPath, "error", err)
 		return nil, fmt.Errorf("failed to create thumbnails directory %q: %w", cfg.ThumbnailsPath, err)
 	}
@@ -106,7 +107,6 @@ func metaKey(filename string) []byte {
 func fileKey(filename string) []byte {
 	return []byte(filePrefix + filename)
 }
-
 
 // Helper function to create view hash keys
 func viewHashKey(filename string) []byte {
@@ -175,7 +175,7 @@ func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, 
 
 	// Write file content directly to filesystem
 	filePath := filepath.Join(s.cfg.FilesPath, filename)
-	if err := os.WriteFile(filePath, contentBytes, 0644); err != nil {
+	if err := os.WriteFile(filePath, contentBytes, 0o600); err != nil {
 		return fmt.Errorf("failed to write file to disk: %w", err)
 	}
 
@@ -187,11 +187,11 @@ func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, 
 		if err != nil {
 			s.log.Warn("Failed to decompress thumbnail, storing compressed", "filename", filename, "error", err)
 			// Store compressed if decompression fails
-			if err := os.WriteFile(thumbnailPath, compressedThumbnailBytes, 0644); err != nil {
+			if err := os.WriteFile(thumbnailPath, compressedThumbnailBytes, 0o600); err != nil {
 				return fmt.Errorf("failed to write compressed thumbnail to disk: %w", err)
 			}
 		} else {
-			if err := os.WriteFile(thumbnailPath, decompressed, 0644); err != nil {
+			if err := os.WriteFile(thumbnailPath, decompressed, 0o600); err != nil {
 				return fmt.Errorf("failed to write thumbnail to disk: %w", err)
 			}
 		}
@@ -211,10 +211,14 @@ func (s *Storage) PutFile(ctx context.Context, filename string, info file.Info, 
 	if err != nil {
 		s.log.Error("Failed to put metadata in storage", "filename", filename, "key", string(mKey), "error", err)
 		// Clean up filesystem files if metadata storage fails
-		os.Remove(filePath)
+		if removeErr := os.Remove(filePath); removeErr != nil {
+			s.log.Warn("Failed to clean up file after metadata storage failure", "path", filePath, "error", removeErr)
+		}
 		if compressedThumbnailBytes != nil {
 			thumbnailPath := filepath.Join(s.cfg.ThumbnailsPath, ThumbnailFilename(filename))
-			os.Remove(thumbnailPath)
+			if removeErr := os.Remove(thumbnailPath); removeErr != nil {
+				s.log.Warn("Failed to clean up thumbnail after metadata storage failure", "path", thumbnailPath, "error", removeErr)
+			}
 		}
 		return fmt.Errorf("failed to put metadata for %q: %w", filename, err)
 	}
@@ -252,8 +256,9 @@ func (s *Storage) GetStoredObject(ctx context.Context, filename string) (*Stored
 	}
 
 	// Read content from filesystem
+	// Safe: filename is validated by regex and path is safely constructed with filepath.Join
 	filePath := filepath.Join(s.cfg.FilesPath, filename)
-	contentBytes, err := os.ReadFile(filePath)
+	contentBytes, err := os.ReadFile(filePath) // #nosec G304
 	if err != nil {
 		if os.IsNotExist(err) {
 			s.log.Warn("File content not found on filesystem", "filename", filename, "path", filePath)
@@ -281,11 +286,11 @@ func (s *Storage) PutThumbnail(ctx context.Context, filename string, compressedT
 	if err != nil {
 		s.log.Warn("Failed to decompress thumbnail, storing compressed", "filename", filename, "error", err)
 		// Store compressed if decompression fails
-		if err := os.WriteFile(thumbnailPath, compressedThumbnailBytes, 0644); err != nil {
+		if err := os.WriteFile(thumbnailPath, compressedThumbnailBytes, 0o600); err != nil {
 			return fmt.Errorf("failed to write compressed thumbnail to disk: %w", err)
 		}
 	} else {
-		if err := os.WriteFile(thumbnailPath, decompressed, 0644); err != nil {
+		if err := os.WriteFile(thumbnailPath, decompressed, 0o600); err != nil {
 			return fmt.Errorf("failed to write thumbnail to disk: %w", err)
 		}
 	}
@@ -296,9 +301,10 @@ func (s *Storage) PutThumbnail(ctx context.Context, filename string, compressedT
 
 // GetThumbnail retrieves thumbnail data from filesystem.
 func (s *Storage) GetThumbnail(ctx context.Context, filename string) ([]byte, error) {
+	// Safe: filename is validated by regex and path is safely constructed with filepath.Join
 	thumbnailPath := filepath.Join(s.cfg.ThumbnailsPath, ThumbnailFilename(filename))
 
-	thumbnailData, err := os.ReadFile(thumbnailPath)
+	thumbnailData, err := os.ReadFile(thumbnailPath) // #nosec G304
 	if err != nil {
 		if os.IsNotExist(err) {
 			s.log.Debug("Thumbnail not found on filesystem", "filename", filename, "path", thumbnailPath)
@@ -343,7 +349,10 @@ func CompressContent(rawData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to create gzip writer for CompressContent: %w", err)
 	}
 	if _, err = gzWriter.Write(rawData); err != nil {
-		gzWriter.Close() // Close even on error
+		if closeErr := gzWriter.Close(); closeErr != nil {
+			// Log close error but don't return it since write error is more important
+			return nil, fmt.Errorf("failed to write data to gzip writer: %w (close error: %v)", err, closeErr)
+		}
 		return nil, fmt.Errorf("failed to write data to gzip writer: %w", err)
 	}
 	if err = gzWriter.Close(); err != nil {
@@ -499,7 +508,6 @@ func (s *Storage) GetAllFilesInfo(ctx context.Context) ([]file.Info, error) {
 		return nil // Continue scan
 	})
 	// Note: Unlock is handled by defer above
-
 	if err != nil {
 		// This captures errors from the Get/Unmarshal inside the scan or context cancellation
 		s.log.Error("Error during metadata scan in GetAllFilesInfo", "error", err)

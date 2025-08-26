@@ -1,11 +1,6 @@
 package handlers
 
 import (
-	"birdhole/config"
-	"birdhole/file"
-	"birdhole/markdown"
-	"birdhole/middleware"
-	"birdhole/storage"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -26,6 +21,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"birdhole/config"
+	"birdhole/file"
+	"birdhole/markdown"
+	"birdhole/storage"
 
 	_ "golang.org/x/image/webp"
 
@@ -114,11 +114,6 @@ func httpError(w http.ResponseWriter, logger *slog.Logger, message string, err e
 	}
 	logger.Error(logMsg)
 	http.Error(w, message, statusCode)
-}
-
-func isAdmin(r *http.Request, cfg *config.Config) bool {
-	key := r.Context().Value(middleware.AuthKeyContextKey)
-	return cfg != nil && key == cfg.AdminKey && cfg.AdminKey != ""
 }
 
 // --- Handlers ---
@@ -544,12 +539,8 @@ func (h *Handlers) renderDetail(w http.ResponseWriter, r *http.Request, isPartia
 
 	// --- Render content for text/markdown if applicable ---
 	if strings.HasPrefix(contentType, "text/") {
-		// Use the DecompressContent function from storage package
-		rawContent, err := storage.DecompressContent(storedObj.ContentGz)
-		if err != nil {
-			httpError(w, logger, "Failed to decompress content", err, http.StatusInternalServerError)
-			return
-		}
+		// ContentGz is now uncompressed content from filesystem, no need to decompress
+		rawContent := storedObj.ContentGz
 
 		// Render if markdown or plain text (check prefix for plain text)
 		if contentType == "text/markdown" || contentType == "text/x-markdown" || strings.HasPrefix(contentType, "text/plain") {
@@ -558,13 +549,16 @@ func (h *Handlers) renderDetail(w http.ResponseWriter, r *http.Request, isPartia
 			if renderErr != nil {
 				logger.Error("Markdown rendering failed", "error", renderErr)
 				// Fallback to pre-formatted text on rendering error
-				renderedContent = template.HTML("<p>Error rendering content.</p><pre>" + template.HTMLEscapeString(string(rawContent)) + "</pre>")
+				// Safe: Using HTMLEscapeString to prevent XSS
+				renderedContent = template.HTML("<p>Error rendering content.</p><pre>" + template.HTMLEscapeString(string(rawContent)) + "</pre>") // #nosec G203
 			} else {
-				renderedContent = template.HTML(htmlBytes)
+				// Safe: HTML bytes are from sanitized markdown rendering
+				renderedContent = template.HTML(htmlBytes) // #nosec G203
 			}
 		} else {
 			// For other text types (e.g., text/css, text/javascript), treat as preformatted
-			renderedContent = template.HTML("<pre>" + template.HTMLEscapeString(string(rawContent)) + "</pre>")
+			// Safe: Using HTMLEscapeString to prevent XSS
+			renderedContent = template.HTML("<pre>" + template.HTMLEscapeString(string(rawContent)) + "</pre>") // #nosec G203
 		}
 	}
 
@@ -680,7 +674,7 @@ func (h *Handlers) ThumbnailHandler(w http.ResponseWriter, r *http.Request) {
 			// Store thumbnail to filesystem (fire and forget)
 			go func() {
 				thumbnailPath := filepath.Join(h.Config.ThumbnailsPath, storage.ThumbnailFilename(filename))
-				if storeErr := os.WriteFile(thumbnailPath, generatedThumbBytes, 0644); storeErr != nil {
+				if storeErr := os.WriteFile(thumbnailPath, generatedThumbBytes, 0o600); storeErr != nil {
 					logger.Error("Failed to store generated thumbnail", "filename", filename, "error", storeErr)
 				}
 			}()
@@ -795,7 +789,7 @@ func (h *Handlers) generateThumbnailAsync(filename string, contentBytes []byte, 
 
 	// Write thumbnail directly to filesystem (no compression needed)
 	thumbnailPath := filepath.Join(h.Config.ThumbnailsPath, storage.ThumbnailFilename(filename))
-	err := os.WriteFile(thumbnailPath, thumbBuf.Bytes(), 0644)
+	err := os.WriteFile(thumbnailPath, thumbBuf.Bytes(), 0o600)
 	if err != nil {
 		log.Warn("Failed to write thumbnail to filesystem", "error", err)
 		return

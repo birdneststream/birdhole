@@ -1,12 +1,6 @@
 package main
 
 import (
-	"birdhole/config"
-	"birdhole/handlers"
-	"birdhole/markdown"
-	"birdhole/middleware"
-	"birdhole/storage"
-	"birdhole/templates"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +10,13 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"birdhole/config"
+	"birdhole/handlers"
+	"birdhole/markdown"
+	"birdhole/middleware"
+	"birdhole/storage"
+	"birdhole/templates"
 )
 
 func main() {
