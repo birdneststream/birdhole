@@ -99,6 +99,8 @@ func main() {
 	// --- Authenticated routes ---
 	// Upload (requires upload key) - now async with background thumbnail generation
 	mux.Handle("POST /hole", mw.ClientIP(mw.RateLimit(mw.AuthCheck(&config.AppConfig, false, true, false)(mw.Logging(http.HandlerFunc(handlerDeps.UploadHandler))))))
+	// Derived files (IRC/ANSI content) - public access
+	mux.Handle("GET /derived/{parent}/{filename}", mw.ClientIP(mw.Logging(http.HandlerFunc(handlerDeps.DerivedFileHandler))))
 	// Delete (requires admin key)
 	mux.Handle("DELETE /{filename}", mw.ClientIP(mw.RateLimit(mw.AuthCheck(&config.AppConfig, false, false, true)(mw.Logging(http.HandlerFunc(handlerDeps.DeleteHandler))))))
 

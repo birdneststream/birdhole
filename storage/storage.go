@@ -30,6 +30,7 @@ const (
 	filePrefix     = "file:"
 	thumbPrefix    = "thumb:"
 	viewHashPrefix = "viewhash:"
+	derivedPrefix  = "derived:"
 )
 
 // StoredObject holds the metadata and the compressed content.
@@ -111,6 +112,11 @@ func fileKey(filename string) []byte {
 // Helper function to create view hash keys
 func viewHashKey(filename string) []byte {
 	return []byte(viewHashPrefix + filename)
+}
+
+// derivedKey creates a key for derived file content
+func derivedKey(parentFilename, derivedFilename string) []byte {
+	return []byte(derivedPrefix + parentFilename + ":" + derivedFilename)
 }
 
 // ThumbnailFilename generates thumbnail filename by replacing extension with .jpg
@@ -533,8 +539,26 @@ func (s *Storage) DeleteFile(ctx context.Context, filename string) error {
 		return fmt.Errorf("%w: file metadata %q not found", os.ErrNotExist, filename)
 	}
 
+	// Get file metadata to check for derived files
+	infoData, err := s.db.Get(mKey)
+	if err == nil {
+		var info file.Info
+		if json.Unmarshal(infoData, &info) == nil && len(info.DerivedFiles) > 0 {
+			// Delete all derived files
+			for _, derivedFile := range info.DerivedFiles {
+				dKey := derivedKey(filename, derivedFile.Filename)
+				if delErr := s.db.Delete(dKey); delErr != nil && !errors.Is(delErr, bitcask.ErrKeyNotFound) {
+					s.log.Warn("Failed to delete derived file during cleanup",
+						"parent", filename,
+						"derived", derivedFile.Filename,
+						"error", delErr)
+				}
+			}
+		}
+	}
+
 	// Delete metadata from Bitcask
-	err := s.db.Delete(mKey)
+	err = s.db.Delete(mKey)
 	if err != nil {
 		s.log.Error("Failed to delete metadata", "filename", filename, "key", string(mKey), "error", err)
 	}
@@ -681,6 +705,63 @@ func (s *Storage) CleanupExpired(ctx context.Context) (int, error) {
 
 	s.log.Info("Finished expired file cleanup run", "deleted_count", deletedCount)
 	return deletedCount, nil // Return total count, errors are logged
+}
+
+// PutDerivedFile stores derived file content (IRC/ANSI extracted from PNG)
+func (s *Storage) PutDerivedFile(ctx context.Context, parentFilename, derivedFilename string, content []byte) error {
+	dKey := derivedKey(parentFilename, derivedFilename)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Store derived content in Bitcask (content is small enough)
+	if err := s.db.Put(dKey, content); err != nil {
+		s.log.Error("Failed to store derived file",
+			"parent", parentFilename,
+			"derived", derivedFilename,
+			"error", err)
+		return fmt.Errorf("failed to store derived file %q: %w", derivedFilename, err)
+	}
+
+	s.log.Debug("Stored derived file",
+		"parent", parentFilename,
+		"derived", derivedFilename,
+		"size", len(content))
+
+	return nil
+}
+
+// GetDerivedFile retrieves derived file content
+func (s *Storage) GetDerivedFile(ctx context.Context, parentFilename, derivedFilename string) ([]byte, error) {
+	dKey := derivedKey(parentFilename, derivedFilename)
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	content, err := s.db.Get(dKey)
+	if err != nil {
+		if errors.Is(err, bitcask.ErrKeyNotFound) {
+			return nil, fmt.Errorf("%w: derived file %q", os.ErrNotExist, derivedFilename)
+		}
+		return nil, fmt.Errorf("failed to get derived file %q: %w", derivedFilename, err)
+	}
+
+	return content, nil
+}
+
+// DeleteDerivedFile removes a derived file
+func (s *Storage) DeleteDerivedFile(ctx context.Context, parentFilename, derivedFilename string) error {
+	dKey := derivedKey(parentFilename, derivedFilename)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	err := s.db.Delete(dKey)
+	if err != nil && !errors.Is(err, bitcask.ErrKeyNotFound) {
+		return fmt.Errorf("failed to delete derived file %q: %w", derivedFilename, err)
+	}
+
+	return nil
 }
 
 // CheckExpiry runs the cleanup task periodically.

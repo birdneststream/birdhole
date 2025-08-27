@@ -24,6 +24,8 @@
 </head>
 <body>
     <div class="detail-header">
+        {{/* Show back to gallery link only if key is present */}}
+        {{ if .Key }}
         {{/* Prepare map for back link query string */}}
         {{ $galleryParams := dict 
             "tag" .GalleryTag 
@@ -33,6 +35,7 @@
         }}
         {{ $queryString := buildQueryString $galleryParams }}
         <a href="/gallery?key={{ .Key }}{{ if $queryString }}&{{ $queryString }}{{ end }}" class="back-link">&larr; Back to Gallery</a>
+        {{ end }}
         
         <h2 title="{{ .Info.Name }}">{{ .Info.Name }}</h2>
         {{ if .Info.Description }}<p class="detail-description">{{ .Info.Description }}</p>{{ end }}
@@ -143,6 +146,42 @@
                 {{ end }}
             </div>
         </div>
+
+        {{ if .Info.DerivedFiles }}
+        {{/* Derived Files - Full width section */}}
+        <div class="derived-content-section">
+            <h3>Extracted Content</h3>
+            <p class="derived-files-description">
+                This image contains embedded IRC/ANSI art data that was extracted automatically.
+            </p>
+            {{ range .Info.DerivedFiles }}
+            <div class="derived-file-item">
+                <div class="derived-file-info">
+                    {{ if eq .Type "irc" }}
+                    <span class="derived-file-icon">📱</span>
+                    <span class="derived-file-label">IRC Art</span>
+                    {{ else if eq .Type "ansi" }}
+                    <span class="derived-file-icon">💻</span>
+                    <span class="derived-file-label">ANSI Art</span>
+                    {{ end }}
+                    <span class="derived-file-details">{{ .Type | upper }} format ({{ formatBytes .Size }})</span>
+                </div>
+                <div class="derived-file-actions">
+                    <a href="/derived/{{ $.Info.Name }}/{{ .Filename }}" 
+                       target="_blank"
+                       class="action-button view-button">
+                       View
+                    </a>
+                    <a href="/derived/{{ $.Info.Name }}/{{ .Filename }}" 
+                       class="action-button download-button"
+                       download="{{ .Filename }}">
+                       Download
+                    </a>
+                </div>
+            </div>
+            {{ end }}
+        </div>
+        {{ end }}
 
         {{ if and .IsAdmin .Metadata }}
         <div class="info-block metadata-block">

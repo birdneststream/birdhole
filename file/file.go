@@ -26,6 +26,7 @@ type Info struct {
 	Hash        string            `json:"hash,omitempty"`         // Optional file hash (consider adding SHA256 calculation on upload)
 	ProcessedAt int64             `json:"processed_at,omitempty"` // Optional timestamp for when processing (like thumbnailing) finished
 	Panorama    bool              `json:"panorama,omitempty"`     // Panorama flag for detail view
+	DerivedFiles []DerivedFile    `json:"derived_files,omitempty"` // Tracks extracted content from PNG metadata
 }
 
 // GetExtension returns the file extension

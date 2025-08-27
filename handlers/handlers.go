@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -276,6 +277,15 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// --- End Process Custom Metadata ---
 
+	// --- PNG Metadata Extraction (aiscii tag only) ---
+	var shouldExtractMetadata bool
+	for _, tag := range tags {
+		if tag == "aiscii" {
+			shouldExtractMetadata = true
+			break
+		}
+	}
+
 	// --- Quick Image Dimensions (non-blocking) ---
 	var width, height int
 	if strings.HasPrefix(mimeType, "image/") {
@@ -317,6 +327,13 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpError(w, logger, "Failed to store file", err, http.StatusInternalServerError)
 		return
+	}
+
+	// Extract PNG metadata if aiscii tag (regardless of detected MIME type)
+	if shouldExtractMetadata {
+		logger.Debug("Attempting PNG metadata extraction for aiscii tagged file", 
+			"mime_type", mimeType, "filename", uniqueFilename)
+		go h.processPNGMetadata(uniqueFilename, contentBytes, message, logger)
 	}
 
 	// Generate thumbnail in background if it's an image
@@ -796,4 +813,149 @@ func (h *Handlers) generateThumbnailAsync(filename string, contentBytes []byte, 
 	}
 
 	log.Debug("Successfully generated and stored thumbnail", "path", thumbnailPath, "size", len(thumbBuf.Bytes()))
+}
+
+// processPNGMetadata handles extracted PNG metadata in the background
+func (h *Handlers) processPNGMetadata(parentFilename string, pngData []byte, message string, logger *slog.Logger) {
+	log := logger.With("function", "processPNGMetadata", "parent", parentFilename)
+
+	ctx := context.Background()
+	extractor := file.NewPNGMetadataExtractor(logger)
+	metadata, err := extractor.ExtractMircifyMetadata(ctx, pngData)
+	if err != nil {
+		log.Warn("Failed to extract PNG metadata", "error", err)
+		return
+	}
+
+	if !metadata.HasContent() {
+		log.Debug("PNG metadata found but no IRC/ANSI content available")
+		return
+	}
+
+	log.Info("Successfully extracted PNG metadata",
+		"has_irc", metadata.IRC != "",
+		"has_ansi", metadata.ANSI != "")
+
+	var derivedFiles []file.DerivedFile
+
+	// Process IRC content
+	if metadata.IRC != "" {
+		ircFilename := file.GenerateDerivedFilename(parentFilename, message, "irc")
+		ircContent := []byte(metadata.IRC)
+
+		if err := h.Storage.PutDerivedFile(ctx, parentFilename, ircFilename, ircContent); err != nil {
+			log.Error("Failed to store IRC derived file", "error", err)
+		} else {
+			derivedFiles = append(derivedFiles, file.DerivedFile{
+				Type:     "irc",
+				Filename: ircFilename,
+				Size:     int64(len(ircContent)),
+				Created:  time.Now().Unix(),
+			})
+			log.Debug("Stored IRC derived file", "filename", ircFilename, "size", len(ircContent))
+		}
+	}
+
+	// Process ANSI content
+	if metadata.ANSI != "" {
+		ansiFilename := file.GenerateDerivedFilename(parentFilename, message, "ansi")
+		ansiContent := []byte(metadata.ANSI)
+
+		if err := h.Storage.PutDerivedFile(ctx, parentFilename, ansiFilename, ansiContent); err != nil {
+			log.Error("Failed to store ANSI derived file", "error", err)
+		} else {
+			derivedFiles = append(derivedFiles, file.DerivedFile{
+				Type:     "ansi",
+				Filename: ansiFilename,
+				Size:     int64(len(ansiContent)),
+				Created:  time.Now().Unix(),
+			})
+			log.Debug("Stored ANSI derived file", "filename", ansiFilename, "size", len(ansiContent))
+		}
+	}
+
+	// Update parent file metadata with derived file info
+	if len(derivedFiles) > 0 {
+		if err := h.updateFileWithDerivedFiles(ctx, parentFilename, derivedFiles); err != nil {
+			log.Error("Failed to update parent file with derived files info", "error", err)
+		}
+	}
+}
+
+// updateFileWithDerivedFiles updates the parent file's metadata to include derived file references
+func (h *Handlers) updateFileWithDerivedFiles(ctx context.Context, filename string, derivedFiles []file.DerivedFile) error {
+	// Get existing file
+	storedObj, err := h.Storage.GetStoredObject(ctx, filename)
+	if err != nil {
+		return fmt.Errorf("failed to get parent file: %w", err)
+	}
+
+	// Update metadata
+	storedObj.Metadata.DerivedFiles = derivedFiles
+
+	// Re-store metadata (content remains the same)
+	filePath := filepath.Join(h.Config.FilesPath, filename)
+	contentBytes, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file content: %w", err)
+	}
+
+	return h.Storage.PutFile(ctx, filename, storedObj.Metadata, contentBytes, nil)
+}
+
+// DerivedFileHandler serves derived files (IRC/ANSI content extracted from PNGs)
+func (h *Handlers) DerivedFileHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract parent filename and derived filename from URL path
+	// Expected format: /derived/{parent_filename}/{derived_filename}
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/derived/"), "/")
+	if len(pathParts) != 2 {
+		http.NotFound(w, r)
+		return
+	}
+
+	parentFilename := pathParts[0]
+	derivedFilename := pathParts[1]
+
+	logger := h.Log.With("handler", "DerivedFileHandler",
+		"parent", parentFilename,
+		"derived", derivedFilename)
+
+	// Validate parent filename format
+	if !validFilenameRegex.MatchString(parentFilename) {
+		logger.Warn("Invalid parent filename format")
+		http.NotFound(w, r)
+		return
+	}
+
+	// Retrieve derived file content
+	content, err := h.Storage.GetDerivedFile(r.Context(), parentFilename, derivedFilename)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			logger.Warn("Derived file not found")
+			http.NotFound(w, r)
+		} else {
+			httpError(w, logger, "Failed to retrieve derived file", err, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Determine content type
+	contentType := "text/plain; charset=utf-8"
+	if strings.HasSuffix(derivedFilename, ".ans") {
+		contentType = "text/plain; charset=utf-8" // ANSI files are still text
+	}
+
+	// Set headers for inline display (download attribute in HTML will override if needed)
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+	w.Header().Set("Cache-Control", "public, max-age=604800") // 7 days cache
+
+	// Serve content
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write(content)
+	if err != nil {
+		logger.Error("Failed to write derived file content", "error", err)
+	}
+
+	logger.Debug("Served derived file", "size", len(content))
 }

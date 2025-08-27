@@ -32,6 +32,7 @@ var (
 		"isInList":         isInList,
 		"buildQueryString": buildQueryString,
 		"dict":             dictFunc,
+		"upper":            strings.ToUpper,
 	}
 )
 
