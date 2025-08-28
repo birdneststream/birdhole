@@ -331,7 +331,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Extract PNG metadata if aiscii tag (regardless of detected MIME type)
 	if shouldExtractMetadata {
-		logger.Debug("Attempting PNG metadata extraction for aiscii tagged file", 
+		logger.Debug("Attempting PNG metadata extraction for aiscii tagged file",
 			"mime_type", mimeType, "filename", uniqueFilename)
 		go h.processPNGMetadata(uniqueFilename, contentBytes, message, logger)
 	}

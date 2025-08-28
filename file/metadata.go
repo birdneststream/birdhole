@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	pngstructure "github.com/dsoprea/go-png-image-structure/v2"
 	"github.com/dsoprea/go-exif/v3"
+	pngstructure "github.com/dsoprea/go-png-image-structure/v2"
 )
 
 // MircifyMetadata represents the JSON structure embedded in PNG Comment field
@@ -34,10 +34,10 @@ func (m *MircifyMetadata) HasContent() bool {
 
 // DerivedFile tracks extracted content files
 type DerivedFile struct {
-	Type     string `json:"type"`      // "irc" or "ansi"
-	Filename string `json:"filename"`  // Generated filename for derived content
-	Size     int64  `json:"size"`      // Size of derived content
-	Created  int64  `json:"created"`   // Timestamp when derived file was created
+	Type     string `json:"type"`     // "irc" or "ansi"
+	Filename string `json:"filename"` // Generated filename for derived content
+	Size     int64  `json:"size"`     // Size of derived content
+	Created  int64  `json:"created"`  // Timestamp when derived file was created
 }
 
 // PNGMetadataExtractor handles PNG metadata extraction

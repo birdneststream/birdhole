@@ -96,12 +96,6 @@ func (h *Handlers) prepareGalleryData(r *http.Request) (map[string]interface{}, 
 	uniqueMimeTypes := make(map[string]struct{}) // Still collect all unique types for UI
 
 	for _, fileInfo := range allFilesInfo {
-		// Time-based filter: Only show files younger than 24 hours, unless an admin is viewing.
-		isRecent := time.Unix(fileInfo.Timestamp, 0).After(time.Now().Add(-24 * time.Hour))
-		if !isRecent && !isAdmin {
-			continue
-		}
-
 		isVisible := !fileInfo.Hidden || isAdmin
 		if isVisible {
 			// Collect unique tags and mime types from all visible files for the UI controls
