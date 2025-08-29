@@ -137,7 +137,7 @@
                 </a>
                 {{/* Edit in ASCIIBIRD button for ASCII/ANSI art files */}}
                 {{ if .Info.DerivedFiles }}
-                <a href="https://asciibird.birdnest.live/?birdhole={{ .Info.Name }}" 
+                <a href="https://asciibird.birdnest.live/?birdhole={{ trimSuffix .Info.Name ".txt" }}" 
                    target="_blank"
                    class="action-button edit-button"> 
                    Edit in ASCIIBIRD
