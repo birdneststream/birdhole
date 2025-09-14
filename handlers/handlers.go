@@ -280,7 +280,7 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	// --- PNG Metadata Extraction (aiscii tag only) ---
 	var shouldExtractMetadata bool
 	for _, tag := range tags {
-		if tag == "aiscii" {
+		if strings.Contains(tag, "aiscii") {
 			shouldExtractMetadata = true
 			break
 		}
@@ -949,6 +949,11 @@ func (h *Handlers) DerivedFileHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(content)))
 	w.Header().Set("Cache-Control", "public, max-age=604800") // 7 days cache
+
+	// Set CORS headers to allow cross-origin requests (for ASCIIBIRD editor)
+	w.Header().Set("Access-Control-Allow-Origin", "https://asciibird.birdnest.live")
+	w.Header().Set("Access-Control-Allow-Methods", "GET")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 	// Serve content
 	w.WriteHeader(http.StatusOK)

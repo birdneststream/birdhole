@@ -33,6 +33,7 @@ var (
 		"buildQueryString": buildQueryString,
 		"dict":             dictFunc,
 		"upper":            strings.ToUpper,
+		"trimSuffix":       strings.TrimSuffix,
 	}
 )
 

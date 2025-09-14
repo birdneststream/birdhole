@@ -573,6 +573,15 @@ main {
     background-color: #46a1ab;
 }
 
+.edit-button {
+    background-color: #c678dd; /* Purple color */
+    color: #282c34;
+}
+
+.edit-button:hover {
+    background-color: #b565cc;
+}
+
 /* Custom Metadata Table */
 .metadata-block table {
     width: 100%;
